@@ -804,7 +804,10 @@ function App() {
         <section className="landing-empty-panel">
           <div className="landing-empty-hero">
             <span className="landing-badge">ONLINE REVIEW INTELLIGENCE</span>
-            <h2>Turn customer reviews into replies and business decisions.</h2>
+            <h2>
+              Turn customer reviews into{' '}
+              <span className="headline-accent">replies and business decisions.</span>
+            </h2>
             <p className="landing-subtitle">
               EchoDesk is a fast, one-time online audit tool for local businesses.
               Extract live reviews from Google Maps or paste customer feedback to instantly analyze reputation, detect sentiment, and draft AI replies.
