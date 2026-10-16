@@ -7,6 +7,13 @@ interface ApiError {
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const sessionResponse = await fetch('/api/session', {
+    credentials: 'same-origin',
+  });
+  if (!sessionResponse.ok) {
+    throw new Error('Unable to initialize a secure anonymous session.');
+  }
+
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

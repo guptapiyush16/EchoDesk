@@ -17,3 +17,9 @@ services:
         value: gemini-flash-lite-latest
       - key: SERPAPI_API_KEY
         sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: APP_ORIGIN
+        sync: false
+      - key: TRUST_PROXY
+        value: "true"

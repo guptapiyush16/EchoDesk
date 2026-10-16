@@ -1,4 +1,5 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,10 @@ const port = Number(process.env.PORT || 8787);
 const maxBodyBytes = 100_000;
 const requestWindowMs = 60_000;
 const rateLimits = new Map();
+const sessions = new Map();
+const sessionCookie = 'echodesk_session';
+const sessionTtlMs = 24 * 60 * 60 * 1000;
+const sessionSecret = process.env.SESSION_SECRET || (process.env.NODE_ENV === 'production' ? null : 'local-development-secret');
 const allowedTones = new Set([
   'Warm & professional',
   'Short & friendly',
@@ -27,35 +32,25 @@ function json(response, status, body) {
 
 function clientAddress(request) {
   const forwarded = request.headers['x-forwarded-for'];
-  return (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '') || request.socket.remoteAddress || 'unknown';
+  return (process.env.TRUST_PROXY === 'true' && typeof forwarded === 'string'
+    ? forwarded.split(',').at(-1)?.trim()
+    : '') || request.socket.remoteAddress || 'unknown';
 }
 
 function isAllowedOrigin(request) {
   const origin = request.headers.origin;
-  if (!origin) return true;
+  if (!origin) return request.method === 'GET';
+  const configuredOrigins = (process.env.APP_ORIGIN || '').split(',').map((value) => value.trim()).filter(Boolean);
   const host = request.headers.host;
   try {
     const parsedOrigin = new URL(origin);
-    if (parsedOrigin.host === host) return true;
-    if (
-      parsedOrigin.hostname === 'localhost' ||
-      parsedOrigin.hostname === '127.0.0.1' ||
-      parsedOrigin.hostname === '0.0.0.0' ||
-      parsedOrigin.hostname.endsWith('.onrender.com') ||
-      parsedOrigin.hostname.endsWith('.vercel.app')
-    ) {
-      return true;
-    }
-    const forwardedHost = request.headers['x-forwarded-host'];
-    if (forwardedHost && parsedOrigin.host === forwardedHost) return true;
-    return false;
+    return configuredOrigins.length ? configuredOrigins.includes(parsedOrigin.origin) : parsedOrigin.host === host;
   } catch {
     return false;
   }
 }
 
-function checkRateLimit(request, bucket, limit) {
-  const key = `${bucket}:${clientAddress(request)}`;
+function checkRateLimit(key, limit) {
   const now = Date.now();
   const current = rateLimits.get(key);
   if (!current || now - current.startedAt >= requestWindowMs) {
@@ -64,6 +59,58 @@ function checkRateLimit(request, bucket, limit) {
   }
   current.count += 1;
   return current.count <= limit;
+}
+
+function parseCookies(request) {
+  const cookies = {};
+  for (const part of (request.headers.cookie || '').split(';')) {
+    const index = part.indexOf('=');
+    if (index < 0) continue;
+    const key = part.slice(0, index).trim();
+    try {
+      cookies[key] = decodeURIComponent(part.slice(index + 1).trim());
+    } catch {
+      cookies[key] = '';
+    }
+  }
+  return cookies;
+}
+
+function signSession(id) {
+  return crypto.createHmac('sha256', sessionSecret).update(id).digest('base64url');
+}
+
+function createSession(response) {
+  if (!sessionSecret) throw new Error('SESSION_SECRET is not configured.');
+  const id = crypto.randomBytes(32).toString('base64url');
+  sessions.set(id, { createdAt: Date.now(), used: { reply: 0, discover: 0, extract: 0 } });
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  response.setHeader('Set-Cookie', `${sessionCookie}=${encodeURIComponent(`${id}.${signSession(id)}`)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${sessionTtlMs / 1000}${secure}`);
+  return id;
+}
+
+function getSession(request, response, createIfMissing = false) {
+  if (!sessionSecret) throw new Error('SESSION_SECRET is not configured.');
+  const raw = parseCookies(request)[sessionCookie];
+  if (!raw) return createIfMissing ? createSession(response) : null;
+  const [id, signature] = raw.split('.');
+  const expected = signSession(id || '');
+  if (!id || !signature || signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    return createIfMissing ? createSession(response) : null;
+  }
+  const session = sessions.get(id);
+  if (!session || Date.now() - session.createdAt > sessionTtlMs) return createIfMissing ? createSession(response) : null;
+  return id;
+}
+
+function authorizeRequest(request, response, bucket, limit) {
+  const sessionId = getSession(request, response);
+  if (!sessionId) return null;
+  const session = sessions.get(sessionId);
+  if (!checkRateLimit(`${bucket}:ip:${clientAddress(request)}`, limit) || !checkRateLimit(`${bucket}:session:${sessionId}`, limit)) return false;
+  if (session.used[bucket] >= limit) return false;
+  session.used[bucket] += 1;
+  return true;
 }
 
 async function readJson(request) {
@@ -221,12 +268,28 @@ async function extractReviewsFromUrl(body) {
   if (!apiKey) throw new Error('SerpAPI is not configured on the server. Set SERPAPI_API_KEY.');
 
   let targetUrl = input;
-  if (input.includes('maps.app.goo.gl') || input.includes('goo.gl/maps')) {
+  let parsedInput = null;
+  try {
+    parsedInput = new URL(input);
+  } catch {
+    // Treat non-URL input as a Google Maps search query.
+  }
+  const shortLinkHosts = new Set(['maps.app.goo.gl', 'goo.gl']);
+  const redirectHosts = new Set(['maps.app.goo.gl', 'goo.gl', 'google.com', 'www.google.com', 'maps.google.com']);
+  if (parsedInput && shortLinkHosts.has(parsedInput.hostname.toLowerCase())) {
+    if (parsedInput.protocol !== 'https:') throw new Error('Only HTTPS Google Maps short links are supported.');
     try {
-      const resp = await fetch(input, { method: 'GET', redirect: 'follow' });
-      if (resp.url) targetUrl = resp.url;
+      const resp = await fetch(parsedInput, { method: 'GET', redirect: 'manual' });
+      const location = resp.headers.get('location');
+      if (location) {
+        const redirected = new URL(location, parsedInput);
+        if (redirected.protocol !== 'https:' || !redirectHosts.has(redirected.hostname.toLowerCase())) {
+          throw new Error('The map link redirects to an untrusted host.');
+        }
+        targetUrl = redirected.toString();
+      }
     } catch {
-      // Ignore redirect failure and use original input
+      throw new Error('Unable to safely resolve the Google Maps link.');
     }
   }
 
@@ -332,16 +395,26 @@ const server = http.createServer(async (request, response) => {
         serpApiConfigured: Boolean(process.env.SERPAPI_API_KEY),
       });
     }
+    if (request.method === 'GET' && request.url === '/api/session') {
+      getSession(request, response, true);
+      return json(response, 200, { ok: true });
+    }
     if (request.method === 'POST' && request.url === '/api/extract-reviews') {
-      if (!checkRateLimit(request, 'extract', 15)) return json(response, 429, { error: 'Too many extraction requests. Try again later.' });
+      const authorized = authorizeRequest(request, response, 'extract', 15);
+      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return json(response, 429, { error: 'Anonymous usage limit reached. Try again later.' });
       return json(response, 200, await extractReviewsFromUrl(await readJson(request)));
     }
     if (request.method === 'POST' && request.url === '/api/ai/reply') {
-      if (!checkRateLimit(request, 'reply', 20)) return json(response, 429, { error: 'Too many reply requests. Try again later.' });
+      const authorized = authorizeRequest(request, response, 'reply', 20);
+      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return json(response, 429, { error: 'Anonymous usage limit reached. Try again later.' });
       return json(response, 200, await generateReply(await readJson(request)));
     }
     if (request.method === 'POST' && request.url === '/api/ai/discover-business') {
-      if (!checkRateLimit(request, 'discover', 10)) return json(response, 429, { error: 'Too many discovery requests. Try again later.' });
+      const authorized = authorizeRequest(request, response, 'discover', 10);
+      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return json(response, 429, { error: 'Anonymous usage limit reached. Try again later.' });
       return json(response, 200, await discoverBusiness(await readJson(request)));
     }
     if (request.method === 'GET') return serveStatic(request, response);
@@ -356,7 +429,12 @@ const server = http.createServer(async (request, response) => {
 setInterval(() => {
   const cutoff = Date.now() - requestWindowMs;
   for (const [key, value] of rateLimits) if (value.startedAt < cutoff) rateLimits.delete(key);
+  for (const [id, session] of sessions) if (session.createdAt < Date.now() - sessionTtlMs) sessions.delete(id);
 }, requestWindowMs).unref();
+
+if (process.env.NODE_ENV === 'production' && !sessionSecret) {
+  throw new Error('SESSION_SECRET must be configured in production.');
+}
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`EchoDesk server listening on port ${port}`);

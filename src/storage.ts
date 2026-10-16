@@ -159,16 +159,21 @@ export function parseCsv(input: string): Review[] {
 
 export function exportReviewsToCsv(reviews: Review[]): string {
   const headers = ['ID', 'Customer', 'Date', 'Rating', 'Sentiment', 'Themes', 'Status', 'Review Text', 'Reply'];
+  const csvCell = (value: string | number): string => {
+    const text = String(value);
+    const safeText = /^[=+\-@]/.test(text) ? `'${text}` : text;
+    return `"${safeText.replace(/"/g, '""')}"`;
+  };
   const rows = reviews.map((r) => [
-    r.id,
-    `"${r.customer.replace(/"/g, '""')}"`,
-    `"${r.date}"`,
-    r.rating,
-    r.sentiment,
-    `"${r.themes.join(', ')}"`,
-    r.status,
-    `"${r.text.replace(/"/g, '""')}"`,
-    `"${(r.reply || '').replace(/"/g, '""')}"`,
+    csvCell(r.id),
+    csvCell(r.customer),
+    csvCell(r.date),
+    csvCell(r.rating),
+    csvCell(r.sentiment),
+    csvCell(r.themes.join(', ')),
+    csvCell(r.status),
+    csvCell(r.text),
+    csvCell(r.reply || ''),
   ]);
 
   return [headers.join(','), ...rows.map((row) => row.join(','))].join('\r\n');
