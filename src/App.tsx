@@ -1120,17 +1120,6 @@ function App() {
                           : 'PRIMARY STRENGTH'}
                       </span>
                     </div>
-                    <div className="theme-context">
-                      {theme.name.toLowerCase().includes('wait')
-                        ? 'Most mentions during the 7–9 PM peak rush'
-                        : theme.name.toLowerCase().includes('staff')
-                        ? 'Customers regularly praise team hospitality by name'
-                        : theme.name.toLowerCase().includes('menu')
-                        ? 'Weekend crowd favorites sell out too early'
-                        : theme.name.toLowerCase().includes('clean')
-                        ? 'Guests notice the sparkling and thoughtful details'
-                        : 'Consistently praised flavor profiles and drink consistency'}
-                    </div>
                     <div className="theme-progress">
                       <span style={{ width: `${Math.min(100, theme.share * 2.2)}%` }} />
                     </div>

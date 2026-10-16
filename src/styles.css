@@ -183,8 +183,7 @@ h1 { margin-bottom: 6px; color: var(--ink); font-family: Manrope, 'DM Sans', san
 .theme-title-line strong { color: #46575d; font-size: 9.5px; font-weight: 700; }
 .theme-kind { color: #b28748; font-size: 6.7px; font-weight: 700; letter-spacing: .55px; white-space: nowrap; }
 .theme-kind.strength { color: #458272; }
-.theme-context { overflow: hidden; margin: 3px 0 5px; color: #99a4a7; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.theme-progress { height: 3px; max-width: 100%; background: #f0f2f2; }
+.theme-progress { height: 3px; max-width: 100%; background: #f0f2f2; margin-top: 6px; }
 .theme-progress span { background: #9fc9bf; }
 .theme-count { min-width: 65px; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; color: #9aa4a7; font-size: 7.5px; white-space: nowrap; }
 .theme-count strong { color: #56676d; font-family: Manrope, sans-serif; font-size: 15px; line-height: 1; }
