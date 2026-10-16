@@ -607,20 +607,6 @@ function App() {
     }
   };
 
-  const handleTrimAndAnalyze = (limit = MAX_PASTE_REVIEWS) => {
-    setLimitModal(null);
-    const imported = parseReviewPaste(paste, limit);
-    if (!imported.length) return;
-    setIsAnalyzing(true);
-    setTimeout(() => {
-      setReviews((current) => (current.length ? [...imported, ...current].slice(0, MAX_PASTE_REVIEWS) : imported));
-      setPaste('');
-      setIsAnalyzing(false);
-      changeView('dashboard');
-      setToast(`Analyzed ${imported.length} reviews with AI (50 reviews free tier limit applied).`);
-    }, 600);
-  };
-
   const analyzePasteAction = () => {
     const trimmed = paste.trim();
     if (
@@ -2507,7 +2493,14 @@ function App() {
                 <p>
                   You entered <strong>{limitModal.enteredCount} reviews</strong>. On the Free Tier, <strong>not more than 50 reviews are allowed at a time</strong>.
                   <br /><br />
-                  Please reduce your reviews to 50 or fewer, or trim automatically to the first 50 reviews.
+                  Please reduce your reviews to 50 or fewer, or upgrade to a Pro plan for unlimited bulk analysis.
+                </p>
+              )}
+              {limitModal.type === 'capacity_exceeded' && (
+                <p>
+                  You already have <strong>{limitModal.existingCount} reviews</strong> in this audit. Adding <strong>{limitModal.enteredCount} reviews</strong> would exceed the 50 review audit limit.
+                  <br /><br />
+                  On the Free Tier, an audit cannot exceed 50 reviews total. You can edit your reviews, or start a fresh audit for another business.
                 </p>
               )}
               {limitModal.type === 'audit_locked' && (
@@ -2517,36 +2510,13 @@ function App() {
                   You cannot enter another batch of reviews into this audit. To start a fresh audit for another business, click <strong>Analyze Another Business</strong> below, or upgrade for unlimited bulk reviews.
                 </p>
               )}
-              {limitModal.type === 'capacity_exceeded' && (
-                <p>
-                  You already have <strong>{limitModal.existingCount} reviews</strong> in this audit. Adding <strong>{limitModal.enteredCount} reviews</strong> would exceed the 50 review audit limit.
-                  <br /><br />
-                  You can only add up to <strong>{limitModal.availableRemaining} more review(s)</strong>.
-                </p>
-              )}
             </div>
 
             <div className="limit-modal-actions">
               <button className="button button-quiet button-small" onClick={() => setLimitModal(null)}>
-                {limitModal.type === 'audit_locked' ? 'Cancel' : 'Edit my reviews'}
+                {limitModal.type === 'audit_locked' ? 'Close' : 'Edit my reviews'}
               </button>
-              {limitModal.type === 'more_than_50' && (
-                <button
-                  className="button button-primary button-small"
-                  onClick={() => handleTrimAndAnalyze(MAX_PASTE_REVIEWS)}
-                >
-                  Trim to first 50 & Analyze
-                </button>
-              )}
-              {limitModal.type === 'capacity_exceeded' && limitModal.availableRemaining > 0 && (
-                <button
-                  className="button button-primary button-small"
-                  onClick={() => handleTrimAndAnalyze(limitModal.availableRemaining)}
-                >
-                  Add remaining {limitModal.availableRemaining} & Analyze
-                </button>
-              )}
-              {limitModal.type === 'audit_locked' && (
+              {(limitModal.existingCount > 0 || limitModal.type === 'audit_locked') && (
                 <button
                   className="button button-outline button-small"
                   onClick={() => {
@@ -2558,7 +2528,7 @@ function App() {
                 </button>
               )}
               <button
-                className="button button-outline button-small"
+                className="button button-primary button-small"
                 onClick={() => {
                   setLimitModal(null);
                   changeView('plans');
