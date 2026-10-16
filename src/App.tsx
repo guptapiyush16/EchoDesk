@@ -403,7 +403,15 @@ function App() {
   const [newRating, setNewRating] = useState(5);
   const [newText, setNewText] = useState('');
 
+  // Limit modal state
+  const [limitModal, setLimitModal] = useState<{
+    type: 'more_than_50' | 'audit_locked' | 'capacity_exceeded';
+    enteredCount: number;
+    existingCount: number;
+    availableRemaining: number;
+  } | null>(null);
 
+  const hasReachedAuditLimit = reviews.length >= MAX_PASTE_REVIEWS;
 
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -436,6 +444,7 @@ function App() {
         setReplyReview(null);
         setShowOnboarding(false);
         setShowAddReviewModal(false);
+        setLimitModal(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -598,6 +607,20 @@ function App() {
     }
   };
 
+  const handleTrimAndAnalyze = (limit = MAX_PASTE_REVIEWS) => {
+    setLimitModal(null);
+    const imported = parseReviewPaste(paste, limit);
+    if (!imported.length) return;
+    setIsAnalyzing(true);
+    setTimeout(() => {
+      setReviews((current) => (current.length ? [...imported, ...current].slice(0, MAX_PASTE_REVIEWS) : imported));
+      setPaste('');
+      setIsAnalyzing(false);
+      changeView('dashboard');
+      setToast(`Analyzed ${imported.length} reviews with AI (50 reviews free tier limit applied).`);
+    }, 600);
+  };
+
   const analyzePasteAction = () => {
     const trimmed = paste.trim();
     if (
@@ -610,7 +633,44 @@ function App() {
       void performLinkExtraction(trimmed);
       return;
     }
+
     const totalBlocks = countReviewBlocks(paste);
+    if (!totalBlocks) {
+      setToast('Please paste customer reviews or enter a Google Maps link.');
+      return;
+    }
+
+    if (reviews.length >= MAX_PASTE_REVIEWS) {
+      setLimitModal({
+        type: 'audit_locked',
+        enteredCount: totalBlocks,
+        existingCount: reviews.length,
+        availableRemaining: 0,
+      });
+      return;
+    }
+
+    if (totalBlocks > MAX_PASTE_REVIEWS) {
+      setLimitModal({
+        type: 'more_than_50',
+        enteredCount: totalBlocks,
+        existingCount: reviews.length,
+        availableRemaining: Math.max(0, MAX_PASTE_REVIEWS - reviews.length),
+      });
+      return;
+    }
+
+    if (reviews.length > 0 && reviews.length + totalBlocks > MAX_PASTE_REVIEWS) {
+      const remaining = Math.max(0, MAX_PASTE_REVIEWS - reviews.length);
+      setLimitModal({
+        type: 'capacity_exceeded',
+        enteredCount: totalBlocks,
+        existingCount: reviews.length,
+        availableRemaining: remaining,
+      });
+      return;
+    }
+
     const imported = parseReviewPaste(paste, MAX_PASTE_REVIEWS);
     if (!imported.length) {
       setToast('Please paste customer reviews or enter a Google Maps link.');
@@ -618,20 +678,25 @@ function App() {
     }
     setIsAnalyzing(true);
     setTimeout(() => {
-      setReviews(imported);
+      setReviews((current) => (current.length ? [...imported, ...current].slice(0, MAX_PASTE_REVIEWS) : imported));
       setPaste('');
       setIsAnalyzing(false);
       changeView('dashboard');
-      if (totalBlocks > MAX_PASTE_REVIEWS) {
-        setToast(`Analyzed first 100 reviews (free tier limit). Explore plans for unlimited bulk analysis.`);
-      } else {
-        setToast(`${imported.length} reviews parsed & analyzed with AI.`);
-      }
+      setToast(`${imported.length} reviews parsed & analyzed with AI.`);
     }, 600);
   };
 
   const importCsvFile = async (file?: File) => {
     if (!file) return;
+    if (reviews.length >= MAX_PASTE_REVIEWS) {
+      setLimitModal({
+        type: 'audit_locked',
+        enteredCount: 0,
+        existingCount: reviews.length,
+        availableRemaining: 0,
+      });
+      return;
+    }
     try {
       const text = await file.text();
       const imported = parseCsv(text);
@@ -639,7 +704,17 @@ function App() {
         setToast('No review rows found. Please upload a CSV with review text.');
         return;
       }
-      setReviews((current) => [...imported, ...current]);
+      const available = MAX_PASTE_REVIEWS - reviews.length;
+      if (imported.length > available) {
+        setLimitModal({
+          type: 'more_than_50',
+          enteredCount: imported.length,
+          existingCount: reviews.length,
+          availableRemaining: available,
+        });
+        return;
+      }
+      setReviews((current) => [...imported, ...current].slice(0, MAX_PASTE_REVIEWS));
       changeView('reviews');
       setToast(`${imported.length} reviews imported from ${file.name}.`);
     } catch {
@@ -753,9 +828,15 @@ function App() {
               <button className="button button-outline" onClick={clearDatabase} title="Start fresh audit for another business">
                 <Icon name="refresh" size={15} /> Analyze Another Business
               </button>
-              <button className="button button-primary" onClick={() => changeView('import')}>
-                <Icon name="plus" size={16} /> Add / Paste more
-              </button>
+              {!hasReachedAuditLimit ? (
+                <button className="button button-primary" onClick={() => changeView('import')}>
+                  <Icon name="plus" size={16} /> Add / Paste more
+                </button>
+              ) : (
+                <button className="button button-soft" onClick={() => changeView('plans')} title="50/50 review limit reached for this audit">
+                  <Icon name="lock" size={14} /> 50/50 Free Limit Reached
+                </button>
+              )}
             </>
           ) : (
             <button className="button button-primary" onClick={() => changeView('import')}>
@@ -772,14 +853,18 @@ function App() {
           </div>
           <div className="audit-tier-copy">
             <strong>
-              {reviews.length <= 20
+              {reviews.length >= MAX_PASTE_REVIEWS
+                ? `Free tier audit limit reached (50 / 50 reviews analyzed).`
+                : reviews.length <= 20
                 ? `Displaying ${reviews.length} recent live reviews from Google Maps.`
-                : `Displaying ${reviews.length} customer reviews (free tier limit: 100 reviews per batch).`}
+                : `Displaying ${reviews.length} customer reviews (free tier limit: 50 reviews per audit).`}
             </strong>
             <span>
-              {reviews.length <= 20
+              {reviews.length >= MAX_PASTE_REVIEWS
+                ? 'To analyze another business or batch, start a new audit with "Analyze Another Business" or upgrade to Pro.'
+                : reviews.length <= 20
                 ? 'Only up to 15–20 reviews can be extracted via public links in the free tier. If you want more reviews, explore our Starter & Pro plans.'
-                : 'Pasting reviews is free up to 100 reviews per batch. If extracted reviews are more than that, explore our Pro plan.'}
+                : 'Pasting reviews is free up to 50 reviews per batch. If you want more reviews, explore our Pro plan.'}
             </span>
           </div>
           <button
@@ -818,7 +903,7 @@ function App() {
                   className={`tool-tab-btn ${landingInputTab === 'paste' ? 'active' : ''}`}
                   onClick={() => setLandingInputTab('paste')}
                 >
-                  📋 Paste Reviews (Free up to 100)
+                  📋 Paste Reviews (Free up to 50)
                 </button>
               </div>
 
@@ -892,17 +977,55 @@ function App() {
               ) : (
                 <div className="link-extract-panel" style={{ textAlign: 'left', margin: '0 0 10px' }}>
                   <div className="link-extract-header">
-                    <span className="link-extract-badge">FREE UP TO 100</span>
+                    <span className="link-extract-badge">{hasReachedAuditLimit ? 'LIMIT REACHED (50/50)' : 'FREE UP TO 50'}</span>
                     <div>
                       <strong>Paste raw customer reviews</strong>
-                      <div><small>Pasting reviews is free up to 100 reviews per batch. Gemma & Gemini AI extract sentiment and themes.</small></div>
+                      <div><small>Pasting reviews is free up to 50 reviews per batch. Gemma & Gemini AI extract sentiment and themes.</small></div>
                     </div>
                   </div>
+
+                  {hasReachedAuditLimit && (
+                    <div className="audit-locked-alert">
+                      <div className="audit-locked-info">
+                        <span className="audit-locked-badge">
+                          <Icon name="lock" size={13} /> AUDIT LIMIT REACHED (50/50)
+                        </span>
+                        <p>
+                          You have analyzed 50 reviews in this audit. To enter another batch, start a new audit with <strong>Analyze Another Business</strong> or upgrade.
+                        </p>
+                      </div>
+                      <div className="audit-locked-actions">
+                        <button className="button button-outline button-small" onClick={clearDatabase}>
+                          <Icon name="refresh" size={13} /> Analyze Another Business
+                        </button>
+                        <button className="button button-primary button-small" onClick={() => changeView('plans')}>
+                          View Plans
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <textarea
                     className="large-review-input"
-                    value={paste}
-                    onChange={(e) => setPaste(e.target.value)}
-                    placeholder="Paste customer reviews here separated by blank lines..."
+                    value={hasReachedAuditLimit ? '' : paste}
+                    onChange={(e) => {
+                      if (hasReachedAuditLimit) {
+                        setLimitModal({
+                          type: 'audit_locked',
+                          enteredCount: 0,
+                          existingCount: reviews.length,
+                          availableRemaining: 0,
+                        });
+                        return;
+                      }
+                      setPaste(e.target.value);
+                    }}
+                    disabled={hasReachedAuditLimit}
+                    placeholder={
+                      hasReachedAuditLimit
+                        ? 'Free tier audit limit reached (50/50 reviews analyzed). You cannot enter another batch of reviews to this audit. Click "Analyze Another Business" to start fresh, or upgrade.'
+                        : 'Paste customer reviews here separated by blank lines...'
+                    }
                     rows={4}
                   />
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
@@ -912,14 +1035,22 @@ function App() {
                     <button
                       className="button button-primary button-small"
                       onClick={analyzePasteAction}
-                      disabled={isAnalyzing}
+                      disabled={isAnalyzing || hasReachedAuditLimit}
                     >
-                      {isAnalyzing ? 'Analyzing with AI...' : 'Analyze Reviews ⚡'}
+                      {isAnalyzing ? (
+                        'Analyzing with AI...'
+                      ) : hasReachedAuditLimit ? (
+                        <>
+                          <Icon name="lock" size={13} /> 50/50 Limit Reached
+                        </>
+                      ) : (
+                        'Analyze Reviews ⚡'
+                      )}
                     </button>
                   </div>
                   <div className="tier-limit-note">
                     <span>
-                      ⚡ <strong>Free Tier Limit:</strong> Pasting reviews is free up to 100 reviews per batch.
+                      ⚡ <strong>Free Tier Limit:</strong> Pasting reviews is free up to 50 reviews per batch.
                     </span>
                     <button type="button" onClick={() => changeView('plans')}>
                       Want more? View Plans (Demo) →
@@ -1613,22 +1744,59 @@ function App() {
           </div>
 
           <div className="import-file-divider" style={{ margin: '18px 0 22px' }}>
-            <span>OR PASTE REVIEWS MANUALLY (FREE UP TO 100)</span>
+            <span>OR PASTE REVIEWS MANUALLY (FREE UP TO 50)</span>
           </div>
 
           <div className="import-title-row">
             <div>
-              <h2>Paste customer reviews (up to 100 free)</h2>
+              <h2>Paste customer reviews (up to 50 free)</h2>
               <p>Paste customer feedback or drop in a Google Maps link. Gemma & Gemini AI extract sentiment and themes.</p>
             </div>
-            <span className="optional-label">FREE TIER: 100 MAX</span>
+            <span className="optional-label">FREE TIER: 50 MAX</span>
           </div>
+
+          {hasReachedAuditLimit && (
+            <div className="audit-locked-alert">
+              <div className="audit-locked-info">
+                <span className="audit-locked-badge">
+                  <Icon name="lock" size={13} /> AUDIT LIMIT REACHED (50/50)
+                </span>
+                <p>
+                  You have already analyzed 50 reviews in this audit. You cannot enter another batch into this audit. To start a fresh audit, click <strong>Analyze Another Business</strong> or upgrade.
+                </p>
+              </div>
+              <div className="audit-locked-actions">
+                <button className="button button-outline button-small" onClick={clearDatabase}>
+                  <Icon name="refresh" size={13} /> Analyze Another Business
+                </button>
+                <button className="button button-primary button-small" onClick={() => changeView('plans')}>
+                  View Plans
+                </button>
+              </div>
+            </div>
+          )}
 
           <textarea
             className="large-review-input"
-            value={paste}
-            onChange={(e) => setPaste(e.target.value)}
-            placeholder={`★★★★★ Amazing food and super friendly staff!\n\n★★★ The wait was too long around 8pm, but the manager handled it well.\n\n★★★★ Two dishes were unavailable tonight.\n\n(Tip: You can also paste a Google Maps link directly here!)`}
+            value={hasReachedAuditLimit ? '' : paste}
+            onChange={(e) => {
+              if (hasReachedAuditLimit) {
+                setLimitModal({
+                  type: 'audit_locked',
+                  enteredCount: 0,
+                  existingCount: reviews.length,
+                  availableRemaining: 0,
+                });
+                return;
+              }
+              setPaste(e.target.value);
+            }}
+            disabled={hasReachedAuditLimit}
+            placeholder={
+              hasReachedAuditLimit
+                ? 'Free tier audit limit reached (50/50 reviews analyzed). You cannot enter another batch of reviews to this audit. Click "Analyze Another Business" above to start fresh, or upgrade.'
+                : `★★★★★ Amazing food and super friendly staff!\n\n★★★ The wait was too long around 8pm, but the manager handled it well.\n\n★★★★ Two dishes were unavailable tonight.\n\n(Tip: You can also paste a Google Maps link directly here!)`
+            }
             rows={7}
           />
 
@@ -1643,11 +1811,15 @@ function App() {
             <button
               className="button button-primary"
               onClick={analyzePasteAction}
-              disabled={isAnalyzing}
+              disabled={isAnalyzing || hasReachedAuditLimit}
             >
               {isAnalyzing ? (
                 <>
                   <span className="ai-spinner" /> Analyzing with AI...
+                </>
+              ) : hasReachedAuditLimit ? (
+                <>
+                  <Icon name="lock" size={15} /> 50/50 Limit Reached
                 </>
               ) : (
                 <>
@@ -1663,7 +1835,7 @@ function App() {
 
           <div className="tier-limit-note">
             <span>
-              ⚡ <strong>Free Tier Limit:</strong> Pasting reviews is free up to 100 reviews per batch. For unlimited bulk uploads, explore our plans.
+              ⚡ <strong>Free Tier Limit:</strong> Pasting reviews is free up to 50 reviews per batch. For unlimited bulk uploads, explore our plans.
             </span>
             <button type="button" onClick={() => changeView('plans')}>
               View Plans (Demo) →
@@ -2299,6 +2471,104 @@ function App() {
             resetDemoData();
           }}
         />
+      )}
+
+      {/* REVIEW LIMIT MODAL */}
+      {limitModal && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setLimitModal(null);
+          }}
+        >
+          <section className="reply-modal limit-modal" role="dialog" aria-labelledby="limit-modal-title">
+            <div className="limit-modal-top">
+              <span className="limit-alert-icon">⚠️</span>
+              <div className="limit-modal-titles">
+                <span className="limit-modal-badge">
+                  {limitModal.type === 'audit_locked' ? 'AUDIT LOCKED' : 'FREE TIER LIMIT'}
+                </span>
+                <h2 id="limit-modal-title">
+                  {limitModal.type === 'more_than_50'
+                    ? 'Maximum 50 Reviews Allowed'
+                    : limitModal.type === 'audit_locked'
+                    ? 'Audit Limit Reached (50/50 Reviews)'
+                    : 'Audit Capacity Exceeded'}
+                </h2>
+              </div>
+              <button className="icon-button" onClick={() => setLimitModal(null)} aria-label="Close dialog">
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+
+            <div className="limit-modal-body">
+              {limitModal.type === 'more_than_50' && (
+                <p>
+                  You entered <strong>{limitModal.enteredCount} reviews</strong>. On the Free Tier, <strong>not more than 50 reviews are allowed at a time</strong>.
+                  <br /><br />
+                  Please reduce your reviews to 50 or fewer, or trim automatically to the first 50 reviews.
+                </p>
+              )}
+              {limitModal.type === 'audit_locked' && (
+                <p>
+                  You have already analyzed <strong>{limitModal.existingCount} reviews</strong> in this business audit. On the Free Tier, each audit is capped at 50 reviews.
+                  <br /><br />
+                  You cannot enter another batch of reviews into this audit. To start a fresh audit for another business, click <strong>Analyze Another Business</strong> below, or upgrade for unlimited bulk reviews.
+                </p>
+              )}
+              {limitModal.type === 'capacity_exceeded' && (
+                <p>
+                  You already have <strong>{limitModal.existingCount} reviews</strong> in this audit. Adding <strong>{limitModal.enteredCount} reviews</strong> would exceed the 50 review audit limit.
+                  <br /><br />
+                  You can only add up to <strong>{limitModal.availableRemaining} more review(s)</strong>.
+                </p>
+              )}
+            </div>
+
+            <div className="limit-modal-actions">
+              <button className="button button-quiet button-small" onClick={() => setLimitModal(null)}>
+                {limitModal.type === 'audit_locked' ? 'Cancel' : 'Edit my reviews'}
+              </button>
+              {limitModal.type === 'more_than_50' && (
+                <button
+                  className="button button-primary button-small"
+                  onClick={() => handleTrimAndAnalyze(MAX_PASTE_REVIEWS)}
+                >
+                  Trim to first 50 & Analyze
+                </button>
+              )}
+              {limitModal.type === 'capacity_exceeded' && limitModal.availableRemaining > 0 && (
+                <button
+                  className="button button-primary button-small"
+                  onClick={() => handleTrimAndAnalyze(limitModal.availableRemaining)}
+                >
+                  Add remaining {limitModal.availableRemaining} & Analyze
+                </button>
+              )}
+              {limitModal.type === 'audit_locked' && (
+                <button
+                  className="button button-outline button-small"
+                  onClick={() => {
+                    clearDatabase();
+                    setLimitModal(null);
+                  }}
+                >
+                  <Icon name="refresh" size={14} /> Analyze Another Business
+                </button>
+              )}
+              <button
+                className="button button-outline button-small"
+                onClick={() => {
+                  setLimitModal(null);
+                  changeView('plans');
+                }}
+              >
+                View Plans (Unlimited)
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {/* TOAST NOTIFICATIONS */}

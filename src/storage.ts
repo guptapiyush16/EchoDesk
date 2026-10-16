@@ -27,7 +27,7 @@ const customerNames = [
   'Siddharth B.', 'Dev P.', 'Neha T.', 'Ishita C.', 'Arjun B.', 'Kavita N.',
 ];
 
-export const MAX_PASTE_REVIEWS = 100;
+export const MAX_PASTE_REVIEWS = 50;
 
 export function countReviewBlocks(input: string): number {
   if (!input.trim()) return 0;
