@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, '..', 'dist');
+const waitlistFile = path.join(root, '..', 'data', 'waitlist.json');
 const port = Number(process.env.PORT || 8787);
 const maxBodyBytes = 100_000;
 const requestWindowMs = 60_000;
@@ -370,6 +371,50 @@ async function extractReviewsFromUrl(body) {
   };
 }
 
+async function getWaitlist() {
+  try {
+    if (!fs.existsSync(waitlistFile)) return [];
+    const raw = await fs.promises.readFile(waitlistFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function recordWaitlist(body) {
+  const email = (typeof body?.email === 'string' ? body.email.trim() : '');
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!email || !emailRegex.test(email) || email.length > 150) {
+    throw new Error('Please enter a valid email address.');
+  }
+  const businessName = typeof body?.businessName === 'string' ? body.businessName.trim().slice(0, 160) : '';
+  const plan = typeof body?.plan === 'string' ? body.plan.trim().slice(0, 50) : 'EchoDesk Pro';
+
+  const list = await getWaitlist();
+  const existingIdx = list.findIndex((item) => item.email.toLowerCase() === email.toLowerCase());
+  const entry = {
+    email,
+    businessName: businessName || (existingIdx >= 0 ? list[existingIdx].businessName : ''),
+    plan,
+    updatedAt: new Date().toISOString(),
+    createdAt: existingIdx >= 0 ? list[existingIdx].createdAt : new Date().toISOString(),
+  };
+
+  if (existingIdx >= 0) {
+    list[existingIdx] = entry;
+  } else {
+    list.unshift(entry);
+  }
+
+  const dir = path.dirname(waitlistFile);
+  if (!fs.existsSync(dir)) {
+    await fs.promises.mkdir(dir, { recursive: true });
+  }
+  await fs.promises.writeFile(waitlistFile, JSON.stringify(list, null, 2), 'utf8');
+  return { ok: true, total: list.length, entry };
+}
+
 function serveStatic(request, response) {
   const requested = request.url === '/' ? '/index.html' : request.url.split('?')[0];
   const safePath = path.normalize(path.join(dist, requested));
@@ -401,6 +446,16 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/api/session') {
       getSession(request, response, true);
       return json(response, 200, { ok: true });
+    }
+    if (request.method === 'GET' && request.url === '/api/waitlist') {
+      const list = await getWaitlist();
+      return json(response, 200, { ok: true, total: list.length, entries: list });
+    }
+    if (request.method === 'POST' && request.url === '/api/waitlist') {
+      const authorized = authorizeRequest(request, response, 'waitlist', 30);
+      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return json(response, 429, { error: 'Usage limit reached. Try again in a minute.' });
+      return json(response, 200, await recordWaitlist(await readJson(request)));
     }
     if (request.method === 'POST' && request.url === '/api/extract-reviews') {
       const authorized = authorizeRequest(request, response, 'extract', 15);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   analyzeReviewList,
   generateBusinessInsights,
@@ -414,6 +414,51 @@ function App() {
 
   const hasReachedAuditLimit = reviews.length >= MAX_PASTE_REVIEWS;
 
+  // Pro Waitlist Modal & Demand Validation State
+  const [showWaitlistModal, setShowWaitlistModal] = useState(false);
+  const [waitlistPlan, setWaitlistPlan] = useState('EchoDesk Pro');
+  const [waitlistEmail, setWaitlistEmail] = useState('');
+  const [waitlistBusiness, setWaitlistBusiness] = useState('');
+  const [isSubmittingWaitlist, setIsSubmittingWaitlist] = useState(false);
+  const [waitlistSuccess, setWaitlistSuccess] = useState(false);
+  const [showWaitlistAdmin, setShowWaitlistAdmin] = useState(false);
+  const [waitlistEntries, setWaitlistEntries] = useState<Array<{
+    email: string;
+    businessName: string;
+    plan: string;
+    createdAt: string;
+  }>>(() => {
+    try {
+      const saved = localStorage.getItem('ecodesk.waitlist.v1');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const refreshWaitlist = useCallback(async () => {
+    try {
+      const res = await fetch('/api/waitlist');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.entries)) {
+          setWaitlistEntries(data.entries);
+          try {
+            localStorage.setItem('ecodesk.waitlist.v1', JSON.stringify(data.entries));
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshWaitlist();
+  }, [refreshWaitlist]);
+
   // Action checklist state
   const [actionChecklist, setActionChecklist] = useState<Array<{
     id: string;
@@ -472,6 +517,8 @@ function App() {
         setShowOnboarding(false);
         setShowAddReviewModal(false);
         setLimitModal(null);
+        setShowWaitlistModal(false);
+        setShowWaitlistAdmin(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -807,6 +854,84 @@ function App() {
     const filename = `${businessProfile.name.toLowerCase().replace(/\s+/g, '-')}-action-checklist.csv`;
     downloadFile(csv, filename, 'text/csv');
     setToast('Action checklist downloaded as CSV.');
+  };
+
+  const openWaitlistModal = (plan = 'EchoDesk Pro') => {
+    setWaitlistPlan(plan);
+    setWaitlistEmail('');
+    setWaitlistBusiness(hasSelectedBusiness ? businessProfile.name : '');
+    setWaitlistSuccess(false);
+    setShowWaitlistModal(true);
+  };
+
+  const submitWaitlist = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const cleanEmail = waitlistEmail.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+      setToast('Please enter a valid email address.');
+      return;
+    }
+    setIsSubmittingWaitlist(true);
+    const payload = {
+      email: cleanEmail,
+      businessName: waitlistBusiness.trim() || (hasSelectedBusiness ? businessProfile.name : ''),
+      plan: waitlistPlan,
+    };
+
+    try {
+      const res = await fetch('/api/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to submit.');
+      }
+      setWaitlistSuccess(true);
+      await refreshWaitlist();
+      setToast('Spot reserved! 50% lifetime discount locked in.');
+    } catch {
+      // Fallback: save to localStorage
+      const newEntry = {
+        email: cleanEmail,
+        businessName: payload.businessName,
+        plan: payload.plan,
+        createdAt: new Date().toISOString(),
+      };
+      setWaitlistEntries((prev) => {
+        const filtered = prev.filter((item) => item.email.toLowerCase() !== cleanEmail.toLowerCase());
+        const updated = [newEntry, ...filtered];
+        try {
+          localStorage.setItem('ecodesk.waitlist.v1', JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+        return updated;
+      });
+      setWaitlistSuccess(true);
+      setToast('Spot reserved! 50% lifetime discount locked in.');
+    } finally {
+      setIsSubmittingWaitlist(false);
+    }
+  };
+
+  const downloadWaitlistCsv = () => {
+    if (!waitlistEntries.length) {
+      setToast('No waitlist emails to export yet.');
+      return;
+    }
+    const headers = ['Email', 'Business Name', 'Plan Tier', 'Date Submitted'];
+    const rows = waitlistEntries.map((entry) => [
+      `"${entry.email.replace(/"/g, '""')}"`,
+      `"${(entry.businessName || '').replace(/"/g, '""')}"`,
+      `"${(entry.plan || 'EchoDesk Pro').replace(/"/g, '""')}"`,
+      `"${new Date(entry.createdAt).toLocaleString()}"`,
+    ]);
+    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    downloadFile(csv, `echodesk-pro-waitlist-${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
+    setToast(`Exported ${waitlistEntries.length} waitlist emails.`);
   };
 
   const handleExtractFromUrl = (targetUrl?: string) => {
@@ -2112,6 +2237,50 @@ function App() {
         </span>
       </section>
 
+      {/* DEMAND VALIDATION & OWNER TRACKER */}
+      <div className="waitlist-admin-bar panel">
+        <div className="waitlist-admin-left">
+          <div className="waitlist-admin-indicator">
+            <span className="live-dot" /> PRO DEMAND VALIDATION TRACKER
+          </div>
+          <h3>
+            {waitlistEntries.length} Business {waitlistEntries.length === 1 ? 'Owner has' : 'Owners have'} joined the Pro Waitlist
+          </h3>
+          <div className="demand-progress-bar-wrap">
+            <div
+              className="demand-progress-bar"
+              style={{ width: `${Math.min(100, (waitlistEntries.length / 20) * 100)}%` }}
+            />
+          </div>
+          <p className="waitlist-admin-subtext">
+            {waitlistEntries.length >= 20 ? (
+              <span className="goal-reached-text">🎉 Target reached! 20+ owners registered — proven demand for EchoDesk Pro.</span>
+            ) : waitlistEntries.length >= 10 ? (
+              <span className="goal-progress-text">🚀 Strong validation! {waitlistEntries.length} signups (Target: 10–20 to launch).</span>
+            ) : (
+              <span>Demand validation goal: 10–20 business owner signups ({Math.max(0, 10 - waitlistEntries.length)} more to reach minimum milestone).</span>
+            )}
+          </p>
+        </div>
+        <div className="waitlist-admin-right">
+          <button
+            className="button button-outline button-small"
+            onClick={() => setShowWaitlistAdmin(true)}
+            title="Inspect captured waitlist emails"
+          >
+            <Icon name="file" size={14} /> View Emails ({waitlistEntries.length})
+          </button>
+          <button
+            className="button button-primary button-small"
+            onClick={downloadWaitlistCsv}
+            disabled={waitlistEntries.length === 0}
+            title="Download waitlist as CSV"
+          >
+            <Icon name="download" size={14} /> Download CSV
+          </button>
+        </div>
+      </div>
+
       <div className="demo-submission-banner">
         <span className="demo-submission-pill">READ-ONLY DEMO</span>
         <p>
@@ -2164,11 +2333,10 @@ function App() {
             <span>/ month</span>
           </div>
           <button
-            className="button button-primary button-full"
-            disabled
-            style={{ opacity: 0.65, cursor: 'not-allowed' }}
+            className="button button-outline button-full"
+            onClick={() => openWaitlistModal('EchoDesk Starter')}
           >
-            Read Only · Hacktoberfest 2026 Demo
+            Upgrade to Starter
           </button>
           <div className="plan-divider" />
           <ul>
@@ -2197,11 +2365,10 @@ function App() {
             <span>/ month</span>
           </div>
           <button
-            className="button button-dark button-full"
-            disabled
-            style={{ opacity: 0.65, cursor: 'not-allowed' }}
+            className="button button-primary button-full pro-upgrade-btn"
+            onClick={() => openWaitlistModal('EchoDesk Pro')}
           >
-            Read Only · Hacktoberfest 2026 Demo
+            <Icon name="spark" size={15} /> Upgrade to Pro
           </button>
           <div className="plan-divider" />
           <ul>
@@ -2302,7 +2469,20 @@ function App() {
         >
           <Icon name="credit" size={17} />
           <span>Plans & billing</span>
-          <span className="starter-chip">Starter</span>
+          {waitlistEntries.length > 0 ? (
+            <span
+              className="waitlist-sidebar-pill"
+              title={`${waitlistEntries.length} on Pro waitlist (click to view)`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowWaitlistAdmin(true);
+              }}
+            >
+              {waitlistEntries.length} waitlist
+            </span>
+          ) : (
+            <span className="starter-chip">Starter</span>
+          )}
         </button>
 
         <div className="sidebar-bottom">
@@ -2389,6 +2569,14 @@ function App() {
               />
               <kbd>⌘ K</kbd>
             </label>
+
+            <button
+              className="button button-primary button-small topbar-upgrade-button"
+              onClick={() => openWaitlistModal('EchoDesk Pro')}
+              title="EchoDesk Pro launching next week - 50% off lifetime access"
+            >
+              <Icon name="spark" size={14} /> Upgrade to Pro
+            </button>
 
             <button className="period-button" onClick={() => setToast('Showing last 30 days of customer reviews.')}>
               <Icon name="calendar" size={14} /> Last 30 days <Icon name="chevron" size={13} />
@@ -2726,10 +2914,247 @@ function App() {
                 className="button button-primary button-small"
                 onClick={() => {
                   setLimitModal(null);
-                  changeView('plans');
+                  openWaitlistModal('EchoDesk Pro');
                 }}
               >
-                View Plans (Unlimited)
+                Upgrade to Pro (50% Off)
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {/* FAKE DOOR / PRO WAITLIST MODAL */}
+      {showWaitlistModal && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowWaitlistModal(false);
+          }}
+        >
+          <section className="reply-modal waitlist-modal" role="dialog" aria-labelledby="waitlist-modal-title">
+            <div className="waitlist-modal-header">
+              <div className="waitlist-badge-row">
+                <span className="waitlist-pill">🚀 LAUNCHING NEXT WEEK</span>
+                <span className="waitlist-discount-pill">50% OFF LIFETIME</span>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => setShowWaitlistModal(false)}
+                aria-label="Close dialog"
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+
+            {!waitlistSuccess ? (
+              <form onSubmit={submitWaitlist} className="waitlist-modal-body">
+                <h2 id="waitlist-modal-title" className="waitlist-title">
+                  EchoDesk Pro is launching next week! Enter your email to get 50% off lifetime access.
+                </h2>
+                <p className="waitlist-subtitle">
+                  We are putting the finishing touches on multi-storefront Google sync, automated tone-matched replies, and competitive benchmark alerts. Reserve your founder spot to get 50% off forever.
+                </p>
+
+                <div className="waitlist-form-fields">
+                  <label className="waitlist-input-group">
+                    <span className="waitlist-input-label">
+                      Business Email <span className="waitlist-required">*</span>
+                    </span>
+                    <input
+                      type="email"
+                      required
+                      placeholder="owner@yourbusiness.com"
+                      value={waitlistEmail}
+                      onChange={(e) => setWaitlistEmail(e.target.value)}
+                      className="waitlist-input"
+                      autoFocus
+                    />
+                  </label>
+
+                  <label className="waitlist-input-group">
+                    <span className="waitlist-input-label">
+                      Business Name <small>(Optional)</small>
+                    </span>
+                    <input
+                      type="text"
+                      placeholder={hasSelectedBusiness ? businessProfile.name : 'e.g. Blue Bottle Coffee'}
+                      value={waitlistBusiness}
+                      onChange={(e) => setWaitlistBusiness(e.target.value)}
+                      className="waitlist-input"
+                    />
+                  </label>
+                </div>
+
+                <div className="waitlist-perks-list">
+                  <div className="waitlist-perk">
+                    <span className="waitlist-perk-icon"><Icon name="check" size={13} /></span>
+                    <span><strong>50% off lifetime rate</strong> (₹399/mo instead of ₹799/mo) locked in forever.</span>
+                  </div>
+                  <div className="waitlist-perk">
+                    <span className="waitlist-perk-icon"><Icon name="check" size={13} /></span>
+                    <span>VIP early invite 48 hours before the public launch next week.</span>
+                  </div>
+                  <div className="waitlist-perk">
+                    <span className="waitlist-perk-icon"><Icon name="check" size={13} /></span>
+                    <span>No credit card required today. Cancel anytime.</span>
+                  </div>
+                </div>
+
+                <div className="waitlist-modal-actions">
+                  <button
+                    type="button"
+                    className="button button-quiet button-small"
+                    onClick={() => setShowWaitlistModal(false)}
+                  >
+                    Maybe later
+                  </button>
+                  <button
+                    type="submit"
+                    className="button button-primary waitlist-submit-btn"
+                    disabled={isSubmittingWaitlist}
+                  >
+                    {isSubmittingWaitlist ? 'Reserving spot…' : 'Claim 50% Off Lifetime Access →'}
+                  </button>
+                </div>
+
+                <div className="waitlist-social-proof">
+                  <span className="social-proof-dot" />
+                  <span>
+                    <strong>{waitlistEntries.length} {waitlistEntries.length === 1 ? 'business owner has' : 'business owners have'}</strong> joined the waitlist
+                  </span>
+                </div>
+              </form>
+            ) : (
+              <div className="waitlist-success-state">
+                <div className="waitlist-success-emoji">🎉</div>
+                <h3 className="waitlist-success-title">You're on the Founder Waitlist!</h3>
+                <p className="waitlist-success-desc">
+                  We've reserved your <strong>50% off lifetime access</strong> for <strong>{waitlistEmail}</strong>.
+                </p>
+                <div className="waitlist-success-box">
+                  <Icon name="spark" size={16} />
+                  <span>Watch your inbox next week for your personal VIP invitation link.</span>
+                </div>
+                <div className="waitlist-modal-actions" style={{ marginTop: '20px', justifyContent: 'center' }}>
+                  <button
+                    type="button"
+                    className="button button-primary button-full"
+                    onClick={() => setShowWaitlistModal(false)}
+                  >
+                    Got it, thanks!
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* WAITLIST ADMIN / OWNER SUBMISSIONS MODAL */}
+      {showWaitlistAdmin && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowWaitlistAdmin(false);
+          }}
+        >
+          <section className="reply-modal waitlist-admin-modal" role="dialog" aria-labelledby="waitlist-admin-title">
+            <div className="limit-modal-top">
+              <span className="limit-alert-icon">👥</span>
+              <div className="limit-modal-titles">
+                <span className="limit-modal-badge">OWNER METRICS · DEMAND VALIDATION</span>
+                <h2 id="waitlist-admin-title">
+                  Pro Waitlist Submissions ({waitlistEntries.length})
+                </h2>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => setShowWaitlistAdmin(false)}
+                aria-label="Close dialog"
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+
+            <div className="waitlist-admin-body">
+              <div className="waitlist-admin-stats-row">
+                <div className="admin-stat-box">
+                  <span className="admin-stat-label">Total Emails Captured</span>
+                  <strong className="admin-stat-val">{waitlistEntries.length}</strong>
+                </div>
+                <div className="admin-stat-box">
+                  <span className="admin-stat-label">Demand Goal (10–20)</span>
+                  <strong className="admin-stat-val">{Math.min(100, Math.round((waitlistEntries.length / 20) * 100))}%</strong>
+                </div>
+                <div className="admin-stat-box">
+                  <span className="admin-stat-label">Validation Status</span>
+                  <strong className="admin-stat-val">
+                    {waitlistEntries.length >= 20 ? 'Validated ✅' : waitlistEntries.length >= 10 ? 'Strong Demand 🔥' : 'Testing ⏳'}
+                  </strong>
+                </div>
+              </div>
+
+              {waitlistEntries.length === 0 ? (
+                <div className="waitlist-empty-state">
+                  <p><strong>No waitlist signups recorded yet.</strong></p>
+                  <p>When business owners click <em>"Upgrade to Pro"</em> and enter their email, their submissions will be saved to disk and appear here in real time.</p>
+                  <button
+                    className="button button-outline button-small"
+                    style={{ marginTop: '10px' }}
+                    onClick={() => {
+                      setShowWaitlistAdmin(false);
+                      openWaitlistModal('EchoDesk Pro');
+                    }}
+                  >
+                    Test "Upgrade to Pro" Waitlist Form
+                  </button>
+                </div>
+              ) : (
+                <div className="waitlist-table-container">
+                  <table className="waitlist-table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Email Address</th>
+                        <th>Business Name</th>
+                        <th>Plan</th>
+                        <th>Submitted At</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {waitlistEntries.map((entry, idx) => (
+                        <tr key={`${entry.email}-${idx}`}>
+                          <td className="entry-index">{idx + 1}</td>
+                          <td className="entry-email"><strong>{entry.email}</strong></td>
+                          <td className="entry-business">{entry.businessName || <span className="muted-text">—</span>}</td>
+                          <td><span className="plan-badge">{entry.plan || 'EchoDesk Pro'}</span></td>
+                          <td className="entry-time">
+                            {new Date(entry.createdAt).toLocaleDateString()} {new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="limit-modal-actions" style={{ marginTop: '16px' }}>
+              <button
+                className="button button-quiet button-small"
+                onClick={() => setShowWaitlistAdmin(false)}
+              >
+                Close
+              </button>
+              <button
+                className="button button-primary button-small"
+                onClick={downloadWaitlistCsv}
+                disabled={waitlistEntries.length === 0}
+              >
+                <Icon name="download" size={14} /> Download CSV ({waitlistEntries.length})
               </button>
             </div>
           </section>
