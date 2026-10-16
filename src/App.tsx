@@ -737,15 +737,6 @@ function App() {
     <>
       <section className="welcome-row">
         <div>
-          <div className="eyebrow">
-            {new Date().toLocaleDateString('en-US', {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-              year: 'numeric',
-            }).toUpperCase()}{' '}
-            <span className="eyebrow-dot" /> ONLINE REVIEW INTELLIGENCE
-          </div>
           <h1>
             Welcome to EchoDesk<span className="heading-period">.</span>
           </h1>
@@ -1082,7 +1073,6 @@ function App() {
           <section className="panel themes-panel">
             <div className="panel-heading">
               <div>
-                <div className="eyebrow panel-eyebrow">THE SIGNAL BENEATH THE STARS</div>
                 <h2>
                   Operational analysis <span className="ampersand">&</span> recurring themes
                 </h2>
@@ -1142,7 +1132,6 @@ function App() {
           <section className="panel review-stream">
             <div className="panel-heading stream-heading">
               <div>
-                <div className="eyebrow panel-eyebrow">THE CUSTOMER VOICE</div>
                 <h2>Recent reviews</h2>
                 <p className="panel-description">Real customer experiences shaping your reputation.</p>
               </div>
@@ -1171,7 +1160,6 @@ function App() {
           <section className="panel actions-panel">
             <div className="panel-heading action-heading">
               <div>
-                <div className="eyebrow panel-eyebrow">YOUR NEXT BEST MOVES</div>
                 <h2>Prioritized actions</h2>
               </div>
               <span className="recommendation-count">{businessInsights.length} suggestions</span>
@@ -1252,13 +1240,9 @@ function App() {
     <>
       <section className="page-heading">
         <div>
-          <div className="eyebrow">CUSTOMER FEEDBACK</div>
           <h1>
             Review inbox<span className="heading-period">.</span>
           </h1>
-          <p className="welcome-subtitle">
-            Every review is a chance to build loyalty, address feedback, and protect your brand.
-          </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button className="button button-outline" onClick={() => setShowAddReviewModal(true)}>
@@ -1393,13 +1377,9 @@ function App() {
     <>
       <section className="page-heading">
         <div>
-          <div className="eyebrow">FROM FEEDBACK TO BUSINESS DECISIONS</div>
           <h1>
             Business insights<span className="heading-period">.</span>
           </h1>
-          <p className="welcome-subtitle">
-            What is the biggest operational problem? What do customers love? What should the owner improve?
-          </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button className="button button-outline" onClick={handleCopyActionPlan}>
@@ -1414,9 +1394,6 @@ function App() {
       {/* BIGGEST OPPORTUNITY HERO */}
       <section className="insight-hero panel">
         <div className="insight-hero-copy">
-          <span className="insight-kicker">
-            <Icon name="spark" size={14} /> BIGGEST OPERATIONAL OPPORTUNITY
-          </span>
           <h2>{waitingTheme ? insightTitle(waitingTheme.name) : 'Smooth out the evening rush'}</h2>
           <p>
             {waitingTheme
