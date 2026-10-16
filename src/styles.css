@@ -945,17 +945,14 @@ h1 { margin-bottom: 6px; color: var(--ink); font-family: Manrope, 'DM Sans', san
 }
 .landing-action-card h3 {
   font-family: Manrope, sans-serif;
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 700;
   color: var(--ink);
-  margin: 0 0 6px;
-}
-.landing-action-card p {
-  font-size: 9.5px;
-  line-height: 1.5;
-  color: #727c85;
-  margin: 0 0 14px;
+  margin: 0 0 16px;
   flex: 1;
+}
+.landing-action-card .button {
+  margin-top: auto;
 }
 
 /* Hacktoberfest Read-Only Demo Banner */

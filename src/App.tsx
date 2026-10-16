@@ -943,28 +943,24 @@ function App() {
             <div className="landing-action-card" onClick={() => changeView('import')}>
               <span className="landing-card-icon">📋</span>
               <h3>Paste Customer Reviews</h3>
-              <p>Quickly paste reviews or feedback in any format. Gemma & Gemini AI will extract ratings and themes.</p>
               <button className="button button-primary button-small">Paste Reviews</button>
             </div>
 
             <div className="landing-action-card" onClick={() => changeView('import')}>
               <span className="landing-card-icon">📁</span>
               <h3>Upload CSV Export</h3>
-              <p>Import reviews exported from Google Business Profile, TripAdvisor, Zomato, or your POS.</p>
               <button className="button button-outline button-small">Upload CSV</button>
             </div>
 
             <div className="landing-action-card" onClick={resetDemoData}>
               <span className="landing-card-icon">⚡</span>
               <h3>Explore Benchmark Demo</h3>
-              <p>Load 48 realistic benchmark customer reviews to test analysis, insights, and AI replies instantly.</p>
               <button className="button button-quiet button-small">Load 48 Reviews</button>
             </div>
 
             <div className="landing-action-card" onClick={() => changeView('import')}>
               <span className="landing-card-icon">🔗</span>
               <h3>Extract via Platform Link</h3>
-              <p>Provide your Google Maps or review platform URL to pull live reviews and star ratings.</p>
               <button className="button button-outline button-small">Extract Link</button>
             </div>
           </div>
