@@ -5,6 +5,7 @@ import {
   insightTitle,
   summarizeThemes,
   themeRules,
+  type BusinessInsight,
 } from './analysis';
 import { demoReviews, starterPaste } from './demo';
 import { countReviewBlocks, downloadFile, exportReviewsToCsv, loadReviews, MAX_PASTE_REVIEWS, parseCsv, parseReviewPaste, saveReviews } from './storage';
@@ -413,6 +414,32 @@ function App() {
 
   const hasReachedAuditLimit = reviews.length >= MAX_PASTE_REVIEWS;
 
+  // Action checklist state
+  const [actionChecklist, setActionChecklist] = useState<Array<{
+    id: string;
+    title: string;
+    suggestedAction: string;
+    problemContext: string;
+    priority: string;
+    icon?: string;
+    completed?: boolean;
+  }>>(() => {
+    try {
+      const saved = localStorage.getItem('ecodesk.action-checklist.v1');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ecodesk.action-checklist.v1', JSON.stringify(actionChecklist));
+    } catch {
+      // ignore
+    }
+  }, [actionChecklist]);
+
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => saveReviews(reviews), [reviews]);
@@ -719,7 +746,67 @@ function App() {
     setReviews([]);
     setBusinessProfile(defaultProfile);
     clearBusinessProfile();
+    setActionChecklist([]);
+    try {
+      localStorage.removeItem('ecodesk.action-checklist.v1');
+    } catch {
+      // ignore
+    }
     setToast('Database cleared. Ready for a new business audit.');
+  };
+
+  const toggleActionItem = (insight: BusinessInsight) => {
+    const isAdded = actionChecklist.some((item) => item.id === insight.id);
+    if (isAdded) {
+      setActionChecklist((prev) => prev.filter((item) => item.id !== insight.id));
+      setToast(`Removed from action checklist: "${insight.title}"`);
+    } else {
+      setActionChecklist((prev) => [
+        ...prev,
+        {
+          id: insight.id,
+          title: insight.title,
+          suggestedAction: insight.suggestedAction,
+          problemContext: insight.problemContext,
+          priority: insight.priority,
+          icon: insight.icon,
+          completed: false,
+        },
+      ]);
+      setToast(`Added to action checklist: "${insight.title}"`);
+    }
+  };
+
+  const toggleChecklistItem = (id: string) => {
+    setActionChecklist((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, completed: !item.completed } : item))
+    );
+  };
+
+  const removeChecklistItem = (id: string) => {
+    setActionChecklist((prev) => prev.filter((item) => item.id !== id));
+    setToast('Item removed from checklist.');
+  };
+
+  const clearChecklist = () => {
+    setActionChecklist([]);
+    setToast('Action checklist cleared.');
+  };
+
+  const downloadChecklistCsv = () => {
+    if (!actionChecklist.length) return;
+    const headers = ['Status', 'Priority', 'Action Title', 'Suggested Business Action', 'Identified Issue Context'];
+    const rows = actionChecklist.map((item) => [
+      item.completed ? 'Completed' : 'Pending',
+      `"${item.priority.replace(/"/g, '""')}"`,
+      `"${item.title.replace(/"/g, '""')}"`,
+      `"${item.suggestedAction.replace(/"/g, '""')}"`,
+      `"${item.problemContext.replace(/"/g, '""')}"`,
+    ]);
+    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    const filename = `${businessProfile.name.toLowerCase().replace(/\s+/g, '-')}-action-checklist.csv`;
+    downloadFile(csv, filename, 'text/csv');
+    setToast('Action checklist downloaded as CSV.');
   };
 
   const handleExtractFromUrl = (targetUrl?: string) => {
@@ -1565,14 +1652,122 @@ function App() {
             <div className="insight-rule" />
             <span className="suggested-label">Suggested Business Action</span>
             <p className="insight-recommendation">{insight.suggestedAction}</p>
-            <button
-              className="button button-outline button-small"
-              onClick={() => setToast(`Action added to weekly briefing: "${insight.title}"`)}
-            >
-              Add to action list <Icon name="plus" size={13} />
-            </button>
+            {(() => {
+              const isAdded = actionChecklist.some((item) => item.id === insight.id);
+              return (
+                <button
+                  className={`button button-small ${isAdded ? 'button-added' : 'button-outline'}`}
+                  onClick={() => toggleActionItem(insight)}
+                  title={isAdded ? 'Click to undo / remove from checklist' : 'Add to action list'}
+                >
+                  {isAdded ? (
+                    <>
+                      <Icon name="check" size={13} /> Added ✓
+                    </>
+                  ) : (
+                    <>
+                      Add to action list <Icon name="plus" size={13} />
+                    </>
+                  )}
+                </button>
+              );
+            })()}
           </article>
         ))}
+      </section>
+
+      {/* ACTION CHECKLIST SECTION */}
+      <section className="panel action-checklist-panel">
+        <div className="checklist-heading">
+          <div>
+            <div className="eyebrow panel-eyebrow">TEAM EXECUTION PLAN</div>
+            <h2>Operational Action Checklist</h2>
+            <p className="panel-description">
+              Select key recommendations above to build your team's weekly task plan. Check off items as they are implemented or download as CSV.
+            </p>
+          </div>
+          <div className="checklist-actions">
+            {actionChecklist.length > 0 && (
+              <>
+                <button
+                  className="button button-primary button-small"
+                  onClick={downloadChecklistCsv}
+                  title="Export checklist to CSV spreadsheet"
+                >
+                  <Icon name="download" size={14} /> Download CSV
+                </button>
+                <button
+                  className="button button-quiet button-small"
+                  onClick={clearChecklist}
+                  title="Clear all checklist items"
+                >
+                  <Icon name="trash" size={13} /> Clear
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {actionChecklist.length === 0 ? (
+          <div className="checklist-empty">
+            <span className="checklist-empty-icon">📋</span>
+            <strong>Your action checklist is empty</strong>
+            <p>
+              Click <strong>"Add to action list +"</strong> on any recommendation card above to add tasks to your weekly team plan.
+            </p>
+          </div>
+        ) : (
+          <div className="checklist-items-list">
+            <div className="checklist-progress-bar">
+              <div className="checklist-progress-meta">
+                <span>
+                  {actionChecklist.filter((i) => i.completed).length} of {actionChecklist.length} actions completed
+                </span>
+                <span>
+                  {Math.round((actionChecklist.filter((i) => i.completed).length / actionChecklist.length) * 100)}%
+                </span>
+              </div>
+              <div className="quota-bar">
+                <span
+                  style={{
+                    width: `${(actionChecklist.filter((i) => i.completed).length / actionChecklist.length) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="checklist-grid">
+              {actionChecklist.map((item) => (
+                <div className={`checklist-card ${item.completed ? 'completed' : ''}`} key={item.id}>
+                  <label className="checklist-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(item.completed)}
+                      onChange={() => toggleChecklistItem(item.id)}
+                    />
+                  </label>
+                  <div className="checklist-card-content">
+                    <div className="checklist-card-top">
+                      <span className="checklist-priority-badge">{item.priority}</span>
+                      <strong className={`checklist-item-title ${item.completed ? 'done' : ''}`}>
+                        {item.title}
+                      </strong>
+                    </div>
+                    <p className="checklist-action-text">{item.suggestedAction}</p>
+                    <small className="checklist-context-text">Issue context: {item.problemContext}</small>
+                  </div>
+                  <button
+                    className="icon-button checklist-remove-btn"
+                    title="Remove from checklist"
+                    onClick={() => removeChecklistItem(item.id)}
+                  >
+                    <Icon name="close" size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* WHAT CUSTOMERS LOVE SECTION */}
