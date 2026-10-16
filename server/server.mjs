@@ -387,7 +387,10 @@ function serveStatic(request, response) {
 
 const server = http.createServer(async (request, response) => {
   try {
-    if (!isAllowedOrigin(request)) return json(response, 403, { error: 'Cross-origin requests are not allowed.' });
+    const isApiRequest = request.url?.startsWith('/api/');
+    if (isApiRequest && !isAllowedOrigin(request)) {
+      return json(response, 403, { error: 'Cross-origin requests are not allowed.' });
+    }
     if (request.method === 'GET' && request.url === '/api/health') {
       return json(response, 200, {
         ok: true,
