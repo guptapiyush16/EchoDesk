@@ -11,6 +11,19 @@ export const defaultProfile: BusinessProfile = {
   website: '',
 };
 
+function BrandMark({ size = 26 }: { size?: number }) {
+  return (
+    <div
+      className="brand-mark"
+      style={{ width: `${size}px`, height: `${size}px`, flex: `0 0 ${size}px` }}
+      aria-hidden="true"
+    >
+      <span className="brand-mark-core" />
+      <span className="brand-mark-ring" />
+    </div>
+  );
+}
+
 interface OnboardingModalProps {
   step: number;
   profile: BusinessProfile;
@@ -65,9 +78,13 @@ export function OnboardingModal({
     >
       <section className="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
         <div className="onboarding-header">
-          <span className="onboarding-brand">
-            <span className="onboarding-brand-mark">E</span> EchoDesk
-          </span>
+          <div className="onboarding-brand">
+            <BrandMark size={28} />
+            <div className="onboarding-brand-text">
+              <strong>EchoDesk</strong>
+              <small>ONLINE REVIEW INTELLIGENCE</small>
+            </div>
+          </div>
           <button className="icon-button" aria-label="Close setup" onClick={onClose}>
             <span aria-hidden="true">×</span>
           </button>
