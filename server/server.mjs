@@ -20,7 +20,7 @@ function json(response, status, body) {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'",
+    'Content-Security-Policy': "default-src 'self'; connect-src 'self'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'",
   });
   response.end(JSON.stringify(body));
 }
@@ -37,7 +37,13 @@ function isAllowedOrigin(request) {
   try {
     const parsedOrigin = new URL(origin);
     if (parsedOrigin.host === host) return true;
-    if (parsedOrigin.hostname === 'localhost' || parsedOrigin.hostname === '127.0.0.1' || parsedOrigin.hostname === '0.0.0.0') {
+    if (
+      parsedOrigin.hostname === 'localhost' ||
+      parsedOrigin.hostname === '127.0.0.1' ||
+      parsedOrigin.hostname === '0.0.0.0' ||
+      parsedOrigin.hostname.endsWith('.onrender.com') ||
+      parsedOrigin.hostname.endsWith('.vercel.app')
+    ) {
       return true;
     }
     const forwardedHost = request.headers['x-forwarded-host'];
@@ -353,5 +359,5 @@ setInterval(() => {
 }, requestWindowMs).unref();
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`ReviewReply server listening on port ${port}`);
+  console.log(`EchoDesk server listening on port ${port}`);
 });
