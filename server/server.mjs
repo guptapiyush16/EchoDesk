@@ -14,7 +14,7 @@ const rateLimits = new Map();
 const sessions = new Map();
 const sessionCookie = 'echodesk_session';
 const sessionTtlMs = 24 * 60 * 60 * 1000;
-const sessionSecret = process.env.SESSION_SECRET || (process.env.NODE_ENV === 'production' ? null : 'local-development-secret');
+const sessionSecret = process.env.SESSION_SECRET || 'echodesk-cloud-session-secret-2026-hacktoberfest';
 const allowedTones = new Set([
   'Warm & professional',
   'Short & friendly',
@@ -42,32 +42,46 @@ function clientAddress(request) {
 function isAllowedOrigin(request) {
   const origin = request.headers.origin;
   if (!origin) return true;
-  const configuredOrigins = (process.env.APP_ORIGIN || '').split(',').map((value) => value.trim()).filter(Boolean);
-  const host = request.headers.host;
+
+  const configuredOrigins = (process.env.APP_ORIGIN || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const forwardedHost = request.headers['x-forwarded-host'];
+  const host = forwardedHost || request.headers.host;
+
   try {
     const parsedOrigin = new URL(origin);
+
+    // 1. Explicitly configured origins (e.g. from APP_ORIGIN env var)
     if (configuredOrigins.length && configuredOrigins.includes(parsedOrigin.origin)) {
       return true;
     }
-    if (parsedOrigin.host === host) {
+
+    // 2. Direct host match or forwarded host match (handles reverse proxies on Render, Cloudflare, etc.)
+    if (host) {
+      const cleanHost = host.split(',')[0].trim();
+      if (parsedOrigin.host === cleanHost || parsedOrigin.hostname === cleanHost.split(':')[0]) {
+        return true;
+      }
+    }
+
+    // 3. Render deployment domains (*.onrender.com)
+    if (parsedOrigin.hostname.endsWith('.onrender.com')) {
       return true;
     }
+
+    // 4. Local development / loopback origins
     const isOriginLocal =
       parsedOrigin.hostname === 'localhost' ||
       parsedOrigin.hostname === '127.0.0.1' ||
       parsedOrigin.hostname === '0.0.0.0';
-    const isHostLocal =
-      !host ||
-      host.startsWith('localhost') ||
-      host.startsWith('127.0.0.1') ||
-      host.startsWith('0.0.0.0');
 
-    if (process.env.NODE_ENV !== 'production' && isOriginLocal) {
+    if (isOriginLocal) {
       return true;
     }
-    if (isOriginLocal && isHostLocal) {
-      return true;
-    }
+
     return false;
   } catch {
     return false;
