@@ -21,12 +21,13 @@ const allowedTones = new Set([
   'Apologetic & service-focused',
 ]);
 
-function json(response, status, body) {
+function json(response, status, body, extraHeaders = {}) {
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'self'; connect-src 'self'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; script-src 'self'",
+    ...extraHeaders,
   });
   response.end(JSON.stringify(body));
 }
@@ -40,12 +41,34 @@ function clientAddress(request) {
 
 function isAllowedOrigin(request) {
   const origin = request.headers.origin;
-  if (!origin) return request.method === 'GET';
+  if (!origin) return true;
   const configuredOrigins = (process.env.APP_ORIGIN || '').split(',').map((value) => value.trim()).filter(Boolean);
   const host = request.headers.host;
   try {
     const parsedOrigin = new URL(origin);
-    return configuredOrigins.length ? configuredOrigins.includes(parsedOrigin.origin) : parsedOrigin.host === host;
+    if (configuredOrigins.length && configuredOrigins.includes(parsedOrigin.origin)) {
+      return true;
+    }
+    if (parsedOrigin.host === host) {
+      return true;
+    }
+    const isOriginLocal =
+      parsedOrigin.hostname === 'localhost' ||
+      parsedOrigin.hostname === '127.0.0.1' ||
+      parsedOrigin.hostname === '0.0.0.0';
+    const isHostLocal =
+      !host ||
+      host.startsWith('localhost') ||
+      host.startsWith('127.0.0.1') ||
+      host.startsWith('0.0.0.0');
+
+    if (process.env.NODE_ENV !== 'production' && isOriginLocal) {
+      return true;
+    }
+    if (isOriginLocal && isHostLocal) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -431,13 +454,36 @@ function serveStatic(request, response) {
 }
 
 const server = http.createServer(async (request, response) => {
+  const origin = request.headers.origin;
+  const allowed = isAllowedOrigin(request);
+  const corsHeaders = origin && allowed ? {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Cookie',
+  } : {};
+
+  const sendJson = (status, body) => json(response, status, body, corsHeaders);
+
   try {
     const isApiRequest = request.url?.startsWith('/api/');
-    if (isApiRequest && !isAllowedOrigin(request)) {
-      return json(response, 403, { error: 'Cross-origin requests are not allowed.' });
+
+    if (request.method === 'OPTIONS' && isApiRequest) {
+      if (!allowed) {
+        return sendJson(403, { error: 'Cross-origin requests are not allowed.' });
+      }
+      response.writeHead(204, {
+        ...corsHeaders,
+        'Cache-Control': 'no-store',
+      });
+      return response.end();
+    }
+
+    if (isApiRequest && !allowed) {
+      return sendJson(403, { error: 'Cross-origin requests are not allowed.' });
     }
     if (request.method === 'GET' && request.url === '/api/health') {
-      return json(response, 200, {
+      return sendJson(200, {
         ok: true,
         aiConfigured: Boolean(aiConfig().key),
         serpApiConfigured: Boolean(process.env.SERPAPI_API_KEY),
@@ -445,42 +491,42 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'GET' && request.url === '/api/session') {
       getSession(request, response, true);
-      return json(response, 200, { ok: true });
+      return sendJson(200, { ok: true });
     }
     if (request.method === 'GET' && request.url === '/api/waitlist') {
       const list = await getWaitlist();
-      return json(response, 200, { ok: true, total: list.length, entries: list });
+      return sendJson(200, { ok: true, total: list.length, entries: list });
     }
     if (request.method === 'POST' && request.url === '/api/waitlist') {
       const authorized = authorizeRequest(request, response, 'waitlist', 30);
-      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
-      if (!authorized) return json(response, 429, { error: 'Usage limit reached. Try again in a minute.' });
-      return json(response, 200, await recordWaitlist(await readJson(request)));
+      if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return sendJson(429, { error: 'Usage limit reached. Try again in a minute.' });
+      return sendJson(200, await recordWaitlist(await readJson(request)));
     }
     if (request.method === 'POST' && request.url === '/api/extract-reviews') {
       const authorized = authorizeRequest(request, response, 'extract', 15);
-      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
-      if (!authorized) return json(response, 429, { error: 'Anonymous usage limit reached. Try again later.' });
-      return json(response, 200, await extractReviewsFromUrl(await readJson(request)));
+      if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return sendJson(429, { error: 'Anonymous usage limit reached. Try again later.' });
+      return sendJson(200, await extractReviewsFromUrl(await readJson(request)));
     }
     if (request.method === 'POST' && request.url === '/api/ai/reply') {
       const authorized = authorizeRequest(request, response, 'reply', 20);
-      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
-      if (!authorized) return json(response, 429, { error: 'Anonymous usage limit reached. Try again later.' });
-      return json(response, 200, await generateReply(await readJson(request)));
+      if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return sendJson(429, { error: 'Anonymous usage limit reached. Try again later.' });
+      return sendJson(200, await generateReply(await readJson(request)));
     }
     if (request.method === 'POST' && request.url === '/api/ai/discover-business') {
       const authorized = authorizeRequest(request, response, 'discover', 10);
-      if (authorized === null) return json(response, 401, { error: 'Anonymous session required. Open the app first.' });
-      if (!authorized) return json(response, 429, { error: 'Anonymous usage limit reached. Try again later.' });
-      return json(response, 200, await discoverBusiness(await readJson(request)));
+      if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
+      if (!authorized) return sendJson(429, { error: 'Anonymous usage limit reached. Try again later.' });
+      return sendJson(200, await discoverBusiness(await readJson(request)));
     }
     if (request.method === 'GET') return serveStatic(request, response);
-    return json(response, 404, { error: 'Not found.' });
+    return sendJson(404, { error: 'Not found.' });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Request failed.';
     const status = message.includes('required') || message.includes('too long') || message.includes('valid') || message.includes('Unsupported') ? 400 : 502;
-    return json(response, status, { error: message });
+    return sendJson(status, { error: message });
   }
 });
 
