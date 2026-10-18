@@ -331,57 +331,100 @@ async function extractReviewsFromUrl(body) {
     }
   }
 
-  let targetDataId = null;
-  const dataIdMatch = targetUrl.match(/(0x[0-9a-f]+:0x[0-9a-f]+)/i);
-  if (dataIdMatch) {
-    targetDataId = dataIdMatch[1];
+  // Extract clean search query from URL or plain text input
+  let query = targetUrl;
+  const placeMatch = targetUrl.match(/\/place\/([^/@?]+)/i);
+  if (placeMatch) {
+    let name = decodeURIComponent(placeMatch[1]).replace(/\+/g, ' ');
+    query = name.split('/')[0].trim();
   } else {
-    const placeMatch = targetUrl.match(/place\/([^/@?]+)/i);
-    const query = placeMatch
-      ? decodeURIComponent(placeMatch[1].replace(/\+/g, ' '))
-      : targetUrl.replace(/^https?:\/\/[^/]+\/?/i, '').trim() || targetUrl;
-
-    const searchUrl = new URL('https://serpapi.com/search.json');
-    searchUrl.searchParams.set('engine', 'google_maps');
-    searchUrl.searchParams.set('q', query);
-    searchUrl.searchParams.set('api_key', apiKey);
-
-    const searchRes = await fetch(searchUrl).then((r) => r.json());
-    if (searchRes.error) throw new Error(`SerpAPI search error: ${searchRes.error}`);
-    targetDataId = searchRes.place_results?.data_id || searchRes.local_results?.[0]?.data_id;
-  }
-
-  if (!targetDataId) {
-    throw new Error('Could not identify a Google Maps place from the provided link or search query.');
-  }
-
-  const reviewsUrl = new URL('https://serpapi.com/search.json');
-  reviewsUrl.searchParams.set('engine', 'google_maps_reviews');
-  reviewsUrl.searchParams.set('data_id', targetDataId);
-  reviewsUrl.searchParams.set('api_key', apiKey);
-
-  const reviewsRes = await fetch(reviewsUrl).then((r) => r.json());
-  if (reviewsRes.error) throw new Error(`SerpAPI review error: ${reviewsRes.error}`);
-
-  let rawReviews = Array.isArray(reviewsRes.reviews) ? [...reviewsRes.reviews] : [];
-
-  if (reviewsRes.serpapi_pagination?.next_page_token && rawReviews.length < 15) {
-    try {
-      const page2Url = new URL('https://serpapi.com/search.json');
-      page2Url.searchParams.set('engine', 'google_maps_reviews');
-      page2Url.searchParams.set('data_id', targetDataId);
-      page2Url.searchParams.set('next_page_token', reviewsRes.serpapi_pagination.next_page_token);
-      page2Url.searchParams.set('api_key', apiKey);
-      const page2Res = await fetch(page2Url).then((r) => r.json());
-      if (Array.isArray(page2Res.reviews)) {
-        rawReviews = rawReviews.concat(page2Res.reviews);
+    const searchMatch = targetUrl.match(/\/search\/([^/@?]+)/i);
+    if (searchMatch) {
+      query = decodeURIComponent(searchMatch[1]).replace(/\+/g, ' ').trim();
+    } else {
+      try {
+        const u = new URL(targetUrl);
+        if (u.searchParams.has('q')) {
+          query = u.searchParams.get('q').trim();
+        }
+      } catch {
+        // Plain text query
       }
-    } catch {
-      // Proceed with page 1 reviews if page 2 fails
     }
   }
 
-  const placeInfo = reviewsRes.place_info || {};
+  // 1. Search Google Maps to get the verified place card and data_id
+  const searchUrl = new URL('https://serpapi.com/search.json');
+  searchUrl.searchParams.set('engine', 'google_maps');
+  searchUrl.searchParams.set('q', query || targetUrl);
+  searchUrl.searchParams.set('api_key', apiKey);
+
+  const searchRes = await fetch(searchUrl).then((r) => r.json());
+  if (searchRes.error && !searchRes.place_results && !searchRes.local_results) {
+    throw new Error(`SerpAPI search error: ${searchRes.error}`);
+  }
+
+  const placeResults = searchRes.place_results || searchRes.local_results?.[0] || {};
+  let targetDataId = placeResults.data_id;
+
+  // Fallback to dataId from URL if search didn't return one directly
+  if (!targetDataId) {
+    const dataIdMatch = targetUrl.match(/(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+    if (dataIdMatch) {
+      targetDataId = dataIdMatch[1];
+    }
+  }
+
+  let rawReviews = [];
+  let placeInfo = { ...placeResults };
+
+  // 2. Fetch reviews from google_maps_reviews engine using verified data_id
+  if (targetDataId) {
+    const reviewsUrl = new URL('https://serpapi.com/search.json');
+    reviewsUrl.searchParams.set('engine', 'google_maps_reviews');
+    reviewsUrl.searchParams.set('data_id', targetDataId);
+    reviewsUrl.searchParams.set('api_key', apiKey);
+
+    try {
+      const reviewsRes = await fetch(reviewsUrl).then((r) => r.json());
+      if (Array.isArray(reviewsRes.reviews) && reviewsRes.reviews.length > 0) {
+        rawReviews = [...reviewsRes.reviews];
+        if (reviewsRes.place_info) placeInfo = { ...placeInfo, ...reviewsRes.place_info };
+
+        if (reviewsRes.serpapi_pagination?.next_page_token && rawReviews.length < 15) {
+          try {
+            const page2Url = new URL('https://serpapi.com/search.json');
+            page2Url.searchParams.set('engine', 'google_maps_reviews');
+            page2Url.searchParams.set('data_id', targetDataId);
+            page2Url.searchParams.set('next_page_token', reviewsRes.serpapi_pagination.next_page_token);
+            page2Url.searchParams.set('api_key', apiKey);
+            const page2Res = await fetch(page2Url).then((r) => r.json());
+            if (Array.isArray(page2Res.reviews)) {
+              rawReviews = rawReviews.concat(page2Res.reviews);
+            }
+          } catch {
+            // Proceed with page 1 reviews
+          }
+        }
+      }
+    } catch {
+      // Proceed to fallbacks if reviews API fails
+    }
+  }
+
+  // 3. Fallback to user_reviews or reviews on placeResults if google_maps_reviews was empty
+  if (rawReviews.length === 0 && Array.isArray(placeResults.user_reviews) && placeResults.user_reviews.length > 0) {
+    rawReviews = placeResults.user_reviews;
+  }
+  if (rawReviews.length === 0 && Array.isArray(placeResults.reviews) && placeResults.reviews.length > 0) {
+    rawReviews = placeResults.reviews;
+  }
+
+  if (rawReviews.length === 0) {
+    const placeName = placeInfo.title || query;
+    throw new Error(`No written reviews could be extracted for "${placeName}". The listing may have only star ratings without text comments, or you can paste reviews directly using "Paste Reviews" below.`);
+  }
+
   const formattedReviews = rawReviews.map((r, idx) => {
     const rating = Math.max(1, Math.min(5, Math.round(Number(r.rating) || 5)));
     return {
