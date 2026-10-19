@@ -1006,13 +1006,22 @@ function App() {
       setToast('No waitlist emails to export yet.');
       return;
     }
-    const headers = ['Email', 'Business Name', 'Plan Tier', 'Date Submitted'];
-    const rows = waitlistEntries.map((entry) => [
-      `"${entry.email.replace(/"/g, '""')}"`,
-      `"${(entry.businessName || '').replace(/"/g, '""')}"`,
-      `"${(entry.plan || 'EchoDesk Pro').replace(/"/g, '""')}"`,
-      `"${new Date(entry.createdAt).toLocaleString()}"`,
-    ]);
+    const headers = ['Email', 'Business Name', 'Plan Tier', 'Date', 'Time', 'Date & Time Formatted', 'Timestamp ISO'];
+    const rows = waitlistEntries.map((entry: any) => {
+      const d = entry.createdAt ? new Date(entry.createdAt) : new Date();
+      const dStr = entry.date || d.toISOString().split('T')[0];
+      const tStr = entry.time || (d.toISOString().split('T')[1].slice(0, 8) + ' UTC');
+      const formatted = entry.submittedAtFormatted || d.toUTCString();
+      return [
+        `"${(entry.email || '').replace(/"/g, '""')}"`,
+        `"${(entry.businessName || '').replace(/"/g, '""')}"`,
+        `"${(entry.plan || 'EchoDesk Pro').replace(/"/g, '""')}"`,
+        `"${dStr}"`,
+        `"${tStr}"`,
+        `"${formatted.replace(/"/g, '""')}"`,
+        `"${d.toISOString()}"`,
+      ];
+    });
     const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
     downloadFile(csv, `echodesk-pro-waitlist-${new Date().toISOString().split('T')[0]}.csv`, 'text/csv');
     setToast(`Exported ${waitlistEntries.length} waitlist emails.`);
@@ -3290,21 +3299,27 @@ function App() {
                         <th>Email Address</th>
                         <th>Business Name</th>
                         <th>Plan</th>
-                        <th>Submitted At</th>
+                        <th>Date & Time Submitted</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {waitlistEntries.map((entry, idx) => (
-                        <tr key={`${entry.email}-${idx}`}>
-                          <td className="entry-index">{idx + 1}</td>
-                          <td className="entry-email"><strong>{entry.email}</strong></td>
-                          <td className="entry-business">{entry.businessName || <span className="muted-text">—</span>}</td>
-                          <td><span className="plan-badge">{entry.plan || 'EchoDesk Pro'}</span></td>
-                          <td className="entry-time">
-                            {new Date(entry.createdAt).toLocaleDateString()} {new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </td>
-                        </tr>
-                      ))}
+                      {waitlistEntries.map((entry: any, idx) => {
+                        const d = entry.createdAt ? new Date(entry.createdAt) : new Date();
+                        const displayDate = entry.date || d.toLocaleDateString();
+                        const displayTime = entry.time || d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        return (
+                          <tr key={`${entry.email}-${idx}`}>
+                            <td className="entry-index">{idx + 1}</td>
+                            <td className="entry-email"><strong>{entry.email}</strong></td>
+                            <td className="entry-business">{entry.businessName || <span className="muted-text">—</span>}</td>
+                            <td><span className="plan-badge">{entry.plan || 'EchoDesk Pro'}</span></td>
+                            <td className="entry-time">
+                              <div><strong>{displayDate}</strong></div>
+                              <div style={{ fontSize: '8px', color: '#78716c' }}>{displayTime}</div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

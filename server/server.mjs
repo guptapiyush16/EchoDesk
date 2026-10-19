@@ -474,12 +474,31 @@ async function recordWaitlist(body) {
 
   const list = await getWaitlist();
   const existingIdx = list.findIndex((item) => item.email.toLowerCase() === email.toLowerCase());
+
+  const now = new Date();
+  const dateStr = now.toISOString().split('T')[0];
+  const timeStr = now.toISOString().split('T')[1].slice(0, 8) + ' UTC';
+  const humanReadable = now.toLocaleString('en-US', {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }) + ' (UTC)';
+
   const entry = {
     email,
     businessName: businessName || (existingIdx >= 0 ? list[existingIdx].businessName : ''),
     plan,
-    updatedAt: new Date().toISOString(),
-    createdAt: existingIdx >= 0 ? list[existingIdx].createdAt : new Date().toISOString(),
+    date: existingIdx >= 0 ? (list[existingIdx].date || dateStr) : dateStr,
+    time: existingIdx >= 0 ? (list[existingIdx].time || timeStr) : timeStr,
+    submittedAt: existingIdx >= 0 ? (list[existingIdx].submittedAt || list[existingIdx].createdAt) : now.toISOString(),
+    submittedAtFormatted: existingIdx >= 0 ? (list[existingIdx].submittedAtFormatted || humanReadable) : humanReadable,
+    createdAt: existingIdx >= 0 ? list[existingIdx].createdAt : now.toISOString(),
+    updatedAt: now.toISOString(),
   };
 
   if (existingIdx >= 0) {
@@ -497,11 +516,14 @@ async function recordWaitlist(body) {
   // PERMANENT LOG: Render console logs are retained even across container reboots!
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('📬 [WAITLIST LEAD CAPTURED]:');
-  console.log(`   Email:        ${entry.email}`);
-  console.log(`   Business:     ${entry.businessName || '(Not specified)'}`);
-  console.log(`   Plan:         ${entry.plan}`);
-  console.log(`   Timestamp:    ${entry.createdAt}`);
-  console.log(`   Total Leads:  ${list.length}`);
+  console.log(`   Email:                 ${entry.email}`);
+  console.log(`   Business:              ${entry.businessName || '(Not specified)'}`);
+  console.log(`   Plan:                  ${entry.plan}`);
+  console.log(`   Date:                  ${entry.date}`);
+  console.log(`   Time:                  ${entry.time}`);
+  console.log(`   Date & Time (UTC):     ${entry.submittedAtFormatted}`);
+  console.log(`   Timestamp (ISO):       ${entry.createdAt}`);
+  console.log(`   Total Leads Count:     ${list.length}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
   // Optional webhook dispatch (e.g. Discord, Slack, Zapier, Google Sheets)
@@ -511,7 +533,7 @@ async function recordWaitlist(body) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: `🎉 **New EchoDesk Pro Waitlist Signup!**\n📧 Email: \`${entry.email}\`\n🏢 Business: ${entry.businessName || 'N/A'}\n📦 Plan: ${entry.plan}\n⏰ Time: ${entry.createdAt}\n📈 Total Waitlist: ${list.length}`,
+          content: `🎉 **New EchoDesk Pro Waitlist Signup!**\n📧 Email: \`${entry.email}\`\n🏢 Business: ${entry.businessName || 'N/A'}\n📦 Plan: ${entry.plan}\n📅 Date: ${entry.date}\n⏰ Time: ${entry.time}\n🕒 Full: ${entry.submittedAtFormatted}\n📈 Total Waitlist: ${list.length}`,
         }),
       }).catch((err) => console.error('Waitlist webhook error:', err.message));
     } catch (err) {
@@ -594,13 +616,22 @@ const server = http.createServer(async (request, response) => {
 
       // Support 1-click CSV download via direct URL: ?format=csv
       if (parsedUrl.searchParams.get('format') === 'csv') {
-        const headers = ['Email', 'Business Name', 'Plan Tier', 'Date Submitted'];
-        const rows = list.map((entry) => [
-          `"${(entry.email || '').replace(/"/g, '""')}"`,
-          `"${(entry.businessName || '').replace(/"/g, '""')}"`,
-          `"${(entry.plan || 'EchoDesk Pro').replace(/"/g, '""')}"`,
-          `"${new Date(entry.createdAt).toLocaleString()}"`,
-        ]);
+        const headers = ['Email', 'Business Name', 'Plan Tier', 'Date', 'Time', 'Date & Time Formatted', 'Timestamp ISO'];
+        const rows = list.map((entry) => {
+          const d = entry.createdAt ? new Date(entry.createdAt) : new Date();
+          const dStr = entry.date || d.toISOString().split('T')[0];
+          const tStr = entry.time || (d.toISOString().split('T')[1].slice(0, 8) + ' UTC');
+          const fullFormatted = entry.submittedAtFormatted || d.toUTCString();
+          return [
+            `"${(entry.email || '').replace(/"/g, '""')}"`,
+            `"${(entry.businessName || '').replace(/"/g, '""')}"`,
+            `"${(entry.plan || 'EchoDesk Pro').replace(/"/g, '""')}"`,
+            `"${dStr}"`,
+            `"${tStr}"`,
+            `"${fullFormatted.replace(/"/g, '""')}"`,
+            `"${d.toISOString()}"`,
+          ];
+        });
         const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
         response.writeHead(200, {
           'Content-Type': 'text/csv; charset=utf-8',
