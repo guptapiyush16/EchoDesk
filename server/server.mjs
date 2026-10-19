@@ -526,13 +526,21 @@ async function recordWaitlist(body) {
   console.log(`   Total Leads Count:     ${list.length}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-  // Optional webhook dispatch (e.g. Discord, Slack, Zapier, Google Sheets)
+  // Optional webhook dispatch (e.g. Google Sheets Apps Script, Make.com, Zapier, Discord)
   if (process.env.WAITLIST_WEBHOOK_URL) {
     try {
       fetch(process.env.WAITLIST_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          email: entry.email,
+          businessName: entry.businessName || '',
+          plan: entry.plan,
+          date: entry.date,
+          time: entry.time,
+          submittedAtFormatted: entry.submittedAtFormatted,
+          createdAt: entry.createdAt,
+          totalLeads: list.length,
           content: `🎉 **New EchoDesk Pro Waitlist Signup!**\n📧 Email: \`${entry.email}\`\n🏢 Business: ${entry.businessName || 'N/A'}\n📦 Plan: ${entry.plan}\n📅 Date: ${entry.date}\n⏰ Time: ${entry.time}\n🕒 Full: ${entry.submittedAtFormatted}\n📈 Total Waitlist: ${list.length}`,
         }),
       }).catch((err) => console.error('Waitlist webhook error:', err.message));
