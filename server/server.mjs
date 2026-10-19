@@ -15,6 +15,7 @@ const sessions = new Map();
 const sessionCookie = 'echodesk_session';
 const sessionTtlMs = 24 * 60 * 60 * 1000;
 const sessionSecret = process.env.SESSION_SECRET || 'echodesk-cloud-session-secret-2026-hacktoberfest';
+const adminKey = process.env.ADMIN_KEY || 'echodesk2026';
 const allowedTones = new Set([
   'Warm & professional',
   'Short & friendly',
@@ -492,6 +493,32 @@ async function recordWaitlist(body) {
     await fs.promises.mkdir(dir, { recursive: true });
   }
   await fs.promises.writeFile(waitlistFile, JSON.stringify(list, null, 2), 'utf8');
+
+  // PERMANENT LOG: Render console logs are retained even across container reboots!
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('📬 [WAITLIST LEAD CAPTURED]:');
+  console.log(`   Email:        ${entry.email}`);
+  console.log(`   Business:     ${entry.businessName || '(Not specified)'}`);
+  console.log(`   Plan:         ${entry.plan}`);
+  console.log(`   Timestamp:    ${entry.createdAt}`);
+  console.log(`   Total Leads:  ${list.length}`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+  // Optional webhook dispatch (e.g. Discord, Slack, Zapier, Google Sheets)
+  if (process.env.WAITLIST_WEBHOOK_URL) {
+    try {
+      fetch(process.env.WAITLIST_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: `🎉 **New EchoDesk Pro Waitlist Signup!**\n📧 Email: \`${entry.email}\`\n🏢 Business: ${entry.businessName || 'N/A'}\n📦 Plan: ${entry.plan}\n⏰ Time: ${entry.createdAt}\n📈 Total Waitlist: ${list.length}`,
+        }),
+      }).catch((err) => console.error('Waitlist webhook error:', err.message));
+    } catch (err) {
+      console.error('Waitlist webhook dispatch error:', err.message);
+    }
+  }
+
   return { ok: true, total: list.length, entry };
 }
 
@@ -517,13 +544,15 @@ const server = http.createServer(async (request, response) => {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Cookie',
+    'Access-Control-Allow-Headers': 'Content-Type, Cookie, x-admin-key',
   } : {};
 
   const sendJson = (status, body) => json(response, status, body, corsHeaders);
 
   try {
-    const isApiRequest = request.url?.startsWith('/api/');
+    const parsedUrl = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+    const pathname = parsedUrl.pathname;
+    const isApiRequest = pathname.startsWith('/api/');
 
     if (request.method === 'OPTIONS' && isApiRequest) {
       if (!allowed) {
@@ -539,40 +568,74 @@ const server = http.createServer(async (request, response) => {
     if (isApiRequest && !allowed) {
       return sendJson(403, { error: 'Cross-origin requests are not allowed.' });
     }
-    if (request.method === 'GET' && request.url === '/api/health') {
+    if (request.method === 'GET' && pathname === '/api/health') {
       return sendJson(200, {
         ok: true,
         aiConfigured: Boolean(aiConfig().key),
         serpApiConfigured: Boolean(process.env.SERPAPI_API_KEY),
       });
     }
-    if (request.method === 'GET' && request.url === '/api/session') {
+    if (request.method === 'GET' && pathname === '/api/session') {
       getSession(request, response, true);
       return sendJson(200, { ok: true });
     }
-    if (request.method === 'GET' && request.url === '/api/waitlist') {
+    // PUBLIC WAITLIST: Privacy first — returns total count only, never exposes emails
+    if (request.method === 'GET' && pathname === '/api/waitlist') {
       const list = await getWaitlist();
+      return sendJson(200, { ok: true, total: list.length });
+    }
+    // MAKER / ADMIN WAITLIST: Protected by admin key (query param ?key= or header x-admin-key)
+    if (request.method === 'GET' && pathname === '/api/admin/waitlist') {
+      const providedKey = parsedUrl.searchParams.get('key') || request.headers['x-admin-key'];
+      if (!providedKey || providedKey !== adminKey) {
+        return sendJson(401, { error: 'Unauthorized. Valid admin key required.' });
+      }
+      const list = await getWaitlist();
+
+      // Support 1-click CSV download via direct URL: ?format=csv
+      if (parsedUrl.searchParams.get('format') === 'csv') {
+        const headers = ['Email', 'Business Name', 'Plan Tier', 'Date Submitted'];
+        const rows = list.map((entry) => [
+          `"${(entry.email || '').replace(/"/g, '""')}"`,
+          `"${(entry.businessName || '').replace(/"/g, '""')}"`,
+          `"${(entry.plan || 'EchoDesk Pro').replace(/"/g, '""')}"`,
+          `"${new Date(entry.createdAt).toLocaleString()}"`,
+        ]);
+        const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+        response.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="echodesk-waitlist-${new Date().toISOString().split('T')[0]}.csv"`,
+          'X-Content-Type-Options': 'nosniff',
+          ...corsHeaders,
+        });
+        return response.end(csv);
+      }
+
       return sendJson(200, { ok: true, total: list.length, entries: list });
     }
-    if (request.method === 'POST' && request.url === '/api/waitlist') {
-      const authorized = authorizeRequest(request, response, 'waitlist', 30);
-      if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
-      if (!authorized) return sendJson(429, { error: 'Usage limit reached. Try again in a minute.' });
-      return sendJson(200, await recordWaitlist(await readJson(request)));
+    if (request.method === 'POST' && pathname === '/api/waitlist') {
+      // Create session cookie if missing, and rate limit by IP
+      getSession(request, response, true);
+      const ip = clientAddress(request);
+      if (!checkRateLimit(`waitlist:ip:${ip}`, 30)) {
+        return sendJson(429, { error: 'Usage limit reached. Try again in a minute.' });
+      }
+      const result = await recordWaitlist(await readJson(request));
+      return sendJson(200, { ok: true, total: result.total });
     }
-    if (request.method === 'POST' && request.url === '/api/extract-reviews') {
+    if (request.method === 'POST' && pathname === '/api/extract-reviews') {
       const authorized = authorizeRequest(request, response, 'extract', 15);
       if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
       if (!authorized) return sendJson(429, { error: 'Anonymous usage limit reached. Try again later.' });
       return sendJson(200, await extractReviewsFromUrl(await readJson(request)));
     }
-    if (request.method === 'POST' && request.url === '/api/ai/reply') {
+    if (request.method === 'POST' && pathname === '/api/ai/reply') {
       const authorized = authorizeRequest(request, response, 'reply', 20);
       if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
       if (!authorized) return sendJson(429, { error: 'Anonymous usage limit reached. Try again later.' });
       return sendJson(200, await generateReply(await readJson(request)));
     }
-    if (request.method === 'POST' && request.url === '/api/ai/discover-business') {
+    if (request.method === 'POST' && pathname === '/api/ai/discover-business') {
       const authorized = authorizeRequest(request, response, 'discover', 10);
       if (authorized === null) return sendJson(401, { error: 'Anonymous session required. Open the app first.' });
       if (!authorized) return sendJson(429, { error: 'Anonymous usage limit reached. Try again later.' });

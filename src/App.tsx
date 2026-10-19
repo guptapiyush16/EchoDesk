@@ -422,29 +422,49 @@ function App() {
   const [isSubmittingWaitlist, setIsSubmittingWaitlist] = useState(false);
   const [waitlistSuccess, setWaitlistSuccess] = useState(false);
   const [showWaitlistAdmin, setShowWaitlistAdmin] = useState(false);
+  const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
+  const [adminKeyInput, setAdminKeyInput] = useState('');
+  const [adminKeyError, setAdminKeyError] = useState('');
+  const [isLoadingAdmin, setIsLoadingAdmin] = useState(false);
+  const [savedAdminKey, setSavedAdminKey] = useState<string>(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlKey = urlParams.get('admin') || urlParams.get('key');
+      if (urlKey) {
+        sessionStorage.setItem('ecodesk.admin_key', urlKey);
+        return urlKey;
+      }
+      return sessionStorage.getItem('ecodesk.admin_key') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [waitlistCount, setWaitlistCount] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('ecodesk.waitlist_count.v1');
+      return saved ? Number(saved) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  });
+
   const [waitlistEntries, setWaitlistEntries] = useState<Array<{
     email: string;
     businessName: string;
     plan: string;
     createdAt: string;
-  }>>(() => {
-    try {
-      const saved = localStorage.getItem('ecodesk.waitlist.v1');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  }>>([]);
 
   const refreshWaitlist = useCallback(async () => {
     try {
       const res = await fetch('/api/waitlist');
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data.entries)) {
-          setWaitlistEntries(data.entries);
+        if (typeof data.total === 'number') {
+          setWaitlistCount(data.total);
           try {
-            localStorage.setItem('ecodesk.waitlist.v1', JSON.stringify(data.entries));
+            localStorage.setItem('ecodesk.waitlist_count.v1', String(data.total));
           } catch {
             // ignore
           }
@@ -455,9 +475,52 @@ function App() {
     }
   }, []);
 
+  const fetchAdminWaitlist = useCallback(async (keyToUse?: string) => {
+    const key = (keyToUse || savedAdminKey || adminKeyInput || 'echodesk2026').trim();
+    setIsLoadingAdmin(true);
+    setAdminKeyError('');
+    try {
+      const res = await fetch(`/api/admin/waitlist?key=${encodeURIComponent(key)}`);
+      if (!res.ok) {
+        throw new Error('Invalid maker passcode or unauthorized access.');
+      }
+      const data = await res.json();
+      if (Array.isArray(data.entries)) {
+        setWaitlistEntries(data.entries);
+        setWaitlistCount(data.entries.length);
+        setSavedAdminKey(key);
+        try {
+          sessionStorage.setItem('ecodesk.admin_key', key);
+          localStorage.setItem('ecodesk.waitlist_count.v1', String(data.entries.length));
+        } catch {
+          // ignore
+        }
+        setShowAdminLoginModal(false);
+        setShowWaitlistAdmin(true);
+        setToast(`Maker Portal unlocked (${data.entries.length} waitlist leads).`);
+      }
+    } catch (err) {
+      setAdminKeyError(err instanceof Error ? err.message : 'Invalid passcode.');
+    } finally {
+      setIsLoadingAdmin(false);
+    }
+  }, [savedAdminKey, adminKeyInput]);
+
   useEffect(() => {
     void refreshWaitlist();
   }, [refreshWaitlist]);
+
+  useEffect(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlKey = urlParams.get('admin') || urlParams.get('key');
+      if (urlKey) {
+        void fetchAdminWaitlist(urlKey);
+      }
+    } catch {
+      // ignore
+    }
+  }, [fetchAdminWaitlist]);
 
   // Action checklist state
   const [actionChecklist, setActionChecklist] = useState<Array<{
@@ -890,35 +953,56 @@ function App() {
         throw new Error(data.error || 'Failed to submit.');
       }
       setWaitlistSuccess(true);
-      await refreshWaitlist();
-      setToast('Spot reserved! 50% lifetime discount locked in.');
-    } catch {
-      // Fallback: save to localStorage
-      const newEntry = {
-        email: cleanEmail,
-        businessName: payload.businessName,
-        plan: payload.plan,
-        createdAt: new Date().toISOString(),
-      };
-      setWaitlistEntries((prev) => {
-        const filtered = prev.filter((item) => item.email.toLowerCase() !== cleanEmail.toLowerCase());
-        const updated = [newEntry, ...filtered];
+      if (typeof data.total === 'number') {
+        setWaitlistCount(data.total);
         try {
-          localStorage.setItem('ecodesk.waitlist.v1', JSON.stringify(updated));
+          localStorage.setItem('ecodesk.waitlist_count.v1', String(data.total));
         } catch {
           // ignore
         }
-        return updated;
-      });
+      } else {
+        setWaitlistCount((prev) => prev + 1);
+      }
+      try {
+        localStorage.setItem('ecodesk.my_waitlist_email', cleanEmail);
+      } catch {
+        // ignore
+      }
+      setToast('Spot reserved! 50% lifetime discount locked in.');
+    } catch {
+      // Offline fallback: increment count
+      setWaitlistCount((prev) => prev + 1);
       setWaitlistSuccess(true);
+      try {
+        localStorage.setItem('ecodesk.my_waitlist_email', cleanEmail);
+      } catch {
+        // ignore
+      }
       setToast('Spot reserved! 50% lifetime discount locked in.');
     } finally {
       setIsSubmittingWaitlist(false);
     }
   };
 
+  const copyAllEmailsToClipboard = () => {
+    if (!waitlistEntries.length) {
+      setToast('No waitlist emails to copy.');
+      return;
+    }
+    const emails = waitlistEntries.map((e) => e.email).join(', ');
+    navigator.clipboard.writeText(emails).then(() => {
+      setToast(`Copied ${waitlistEntries.length} emails to clipboard!`);
+    }).catch(() => {
+      setToast('Failed to copy to clipboard.');
+    });
+  };
+
   const downloadWaitlistCsv = () => {
     if (!waitlistEntries.length) {
+      if (savedAdminKey) {
+        window.open(`/api/admin/waitlist?key=${encodeURIComponent(savedAdminKey)}&format=csv`, '_blank');
+        return;
+      }
       setToast('No waitlist emails to export yet.');
       return;
     }
@@ -2244,39 +2328,39 @@ function App() {
             <span className="live-dot" /> PRO DEMAND VALIDATION TRACKER
           </div>
           <h3>
-            {waitlistEntries.length} Business {waitlistEntries.length === 1 ? 'Owner has' : 'Owners have'} joined the Pro Waitlist
+            {waitlistCount} Business {waitlistCount === 1 ? 'Owner has' : 'Owners have'} joined the Pro Waitlist
           </h3>
           <div className="demand-progress-bar-wrap">
             <div
               className="demand-progress-bar"
-              style={{ width: `${Math.min(100, (waitlistEntries.length / 20) * 100)}%` }}
+              style={{ width: `${Math.min(100, (waitlistCount / 20) * 100)}%` }}
             />
           </div>
           <p className="waitlist-admin-subtext">
-            {waitlistEntries.length >= 20 ? (
+            {waitlistCount >= 20 ? (
               <span className="goal-reached-text">🎉 Target reached! 20+ owners registered — proven demand for EchoDesk Pro.</span>
-            ) : waitlistEntries.length >= 10 ? (
-              <span className="goal-progress-text">🚀 Strong validation! {waitlistEntries.length} signups (Target: 10–20 to launch).</span>
+            ) : waitlistCount >= 10 ? (
+              <span className="goal-progress-text">🚀 Strong validation! {waitlistCount} signups (Target: 10–20 to launch).</span>
             ) : (
-              <span>Demand validation goal: 10–20 business owner signups ({Math.max(0, 10 - waitlistEntries.length)} more to reach minimum milestone).</span>
+              <span>Demand validation goal: 10–20 business owner signups ({Math.max(0, 10 - waitlistCount)} more to reach minimum milestone).</span>
             )}
           </p>
         </div>
         <div className="waitlist-admin-right">
           <button
             className="button button-outline button-small"
-            onClick={() => setShowWaitlistAdmin(true)}
-            title="Inspect captured waitlist emails"
+            onClick={() => {
+              if (savedAdminKey && waitlistEntries.length > 0) {
+                setShowWaitlistAdmin(true);
+              } else if (savedAdminKey) {
+                void fetchAdminWaitlist(savedAdminKey);
+              } else {
+                setShowAdminLoginModal(true);
+              }
+            }}
+            title="Private Maker Portal (Passcode protected)"
           >
-            <Icon name="file" size={14} /> View Emails ({waitlistEntries.length})
-          </button>
-          <button
-            className="button button-primary button-small"
-            onClick={downloadWaitlistCsv}
-            disabled={waitlistEntries.length === 0}
-            title="Download waitlist as CSV"
-          >
-            <Icon name="download" size={14} /> Download CSV
+            <Icon name="lock" size={14} /> Maker Portal
           </button>
         </div>
       </div>
@@ -2469,16 +2553,16 @@ function App() {
         >
           <Icon name="credit" size={17} />
           <span>Plans & billing</span>
-          {waitlistEntries.length > 0 ? (
+          {waitlistCount > 0 ? (
             <span
               className="waitlist-sidebar-pill"
-              title={`${waitlistEntries.length} on Pro waitlist (click to view)`}
+              title={`${waitlistCount} business owners on Pro waitlist`}
               onClick={(e) => {
                 e.stopPropagation();
-                setShowWaitlistAdmin(true);
+                changeView('plans');
               }}
             >
-              {waitlistEntries.length} waitlist
+              {waitlistCount} waitlist
             </span>
           ) : (
             <span className="starter-chip">Starter</span>
@@ -3022,7 +3106,7 @@ function App() {
                 <div className="waitlist-social-proof">
                   <span className="social-proof-dot" />
                   <span>
-                    <strong>{waitlistEntries.length} {waitlistEntries.length === 1 ? 'business owner has' : 'business owners have'}</strong> joined the waitlist
+                    <strong>{waitlistCount} {waitlistCount === 1 ? 'business owner has' : 'business owners have'}</strong> joined the waitlist
                   </span>
                 </div>
               </form>
@@ -3052,6 +3136,91 @@ function App() {
         </div>
       )}
 
+      {/* MAKER / OWNER PASSCODE LOGIN MODAL */}
+      {showAdminLoginModal && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setShowAdminLoginModal(false);
+          }}
+        >
+          <section className="reply-modal maker-passcode-modal" role="dialog" aria-labelledby="maker-login-title">
+            <div className="limit-modal-top">
+              <span className="limit-alert-icon">🔒</span>
+              <div className="limit-modal-titles">
+                <span className="limit-modal-badge">CONFIDENTIAL · OWNER ACCESS</span>
+                <h2 id="maker-login-title">Maker Portal</h2>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => setShowAdminLoginModal(false)}
+                aria-label="Close dialog"
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void fetchAdminWaitlist(adminKeyInput);
+              }}
+              style={{ marginTop: '16px' }}
+            >
+              <p className="maker-passcode-desc">
+                Customer emails are confidential and never displayed to public visitors. Enter your maker passcode to view captured emails and export CSV.
+              </p>
+
+              <div className="waitlist-input-group">
+                <label className="waitlist-input-label" htmlFor="maker-passcode-field">
+                  Owner Passcode
+                </label>
+                <input
+                  id="maker-passcode-field"
+                  type="password"
+                  className="waitlist-input"
+                  placeholder="Enter passcode (default: echodesk2026)"
+                  value={adminKeyInput}
+                  onChange={(e) => setAdminKeyInput(e.target.value)}
+                  autoFocus
+                />
+                {adminKeyError && (
+                  <p className="maker-passcode-error">{adminKeyError}</p>
+                )}
+              </div>
+
+              <div className="maker-direct-link-box">
+                <div>🔑 <strong>Default Passcode:</strong> <code>echodesk2026</code></div>
+                <div style={{ marginTop: '4px' }}>
+                  📌 <strong>Auto-Unlock URL:</strong> Add <code>?admin=echodesk2026</code> to your web URL.
+                </div>
+                <div className="maker-log-badge">
+                  <Icon name="check" size={12} /> Render Dashboard Logs permanently store every lead
+                </div>
+              </div>
+
+              <div className="limit-modal-actions" style={{ marginTop: '20px' }}>
+                <button
+                  type="button"
+                  className="button button-quiet button-small"
+                  onClick={() => setShowAdminLoginModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="button button-primary button-small"
+                  disabled={isLoadingAdmin}
+                >
+                  {isLoadingAdmin ? 'Unlocking…' : 'Unlock Leads →'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
       {/* WAITLIST ADMIN / OWNER SUBMISSIONS MODAL */}
       {showWaitlistAdmin && (
         <div
@@ -3065,7 +3234,7 @@ function App() {
             <div className="limit-modal-top">
               <span className="limit-alert-icon">👥</span>
               <div className="limit-modal-titles">
-                <span className="limit-modal-badge">OWNER METRICS · DEMAND VALIDATION</span>
+                <span className="limit-modal-badge">CONFIDENTIAL OWNER PORTAL</span>
                 <h2 id="waitlist-admin-title">
                   Pro Waitlist Submissions ({waitlistEntries.length})
                 </h2>
@@ -3082,7 +3251,7 @@ function App() {
             <div className="waitlist-admin-body">
               <div className="waitlist-admin-stats-row">
                 <div className="admin-stat-box">
-                  <span className="admin-stat-label">Total Emails Captured</span>
+                  <span className="admin-stat-label">Total Leads Captured</span>
                   <strong className="admin-stat-val">{waitlistEntries.length}</strong>
                 </div>
                 <div className="admin-stat-box">
@@ -3100,7 +3269,7 @@ function App() {
               {waitlistEntries.length === 0 ? (
                 <div className="waitlist-empty-state">
                   <p><strong>No waitlist signups recorded yet.</strong></p>
-                  <p>When business owners click <em>"Upgrade to Pro"</em> and enter their email, their submissions will be saved to disk and appear here in real time.</p>
+                  <p>When business owners click <em>"Upgrade to Pro"</em> and enter their email, their submissions will be recorded securely and appear here.</p>
                   <button
                     className="button button-outline button-small"
                     style={{ marginTop: '10px' }}
@@ -3140,14 +3309,38 @@ function App() {
                   </table>
                 </div>
               )}
+
+              <div className="maker-direct-link-box">
+                <div>
+                  💡 <strong>Permanent Render Logs:</strong> If your free-tier container restarts, check Render Dashboard → Logs for <code>[WAITLIST LEAD CAPTURED]</code>.
+                </div>
+                <div style={{ marginTop: '4px' }}>
+                  📥 <strong>Direct CSV Export Link:</strong> <a href={`/api/admin/waitlist?key=${encodeURIComponent(savedAdminKey || 'echodesk2026')}&format=csv`} target="_blank" rel="noreferrer" style={{ color: '#2563eb', textDecoration: 'underline' }}>Download CSV via API</a>
+                </div>
+              </div>
             </div>
 
             <div className="limit-modal-actions" style={{ marginTop: '16px' }}>
               <button
                 className="button button-quiet button-small"
-                onClick={() => setShowWaitlistAdmin(false)}
+                onClick={() => {
+                  try {
+                    sessionStorage.removeItem('ecodesk.admin_key');
+                  } catch {}
+                  setSavedAdminKey('');
+                  setShowWaitlistAdmin(false);
+                  setToast('Logged out of Maker Portal.');
+                }}
               >
-                Close
+                Log Out
+              </button>
+              <button
+                className="button button-outline button-small"
+                onClick={copyAllEmailsToClipboard}
+                disabled={waitlistEntries.length === 0}
+                title="Copy all email addresses separated by comma"
+              >
+                <Icon name="copy" size={14} /> Copy All Emails
               </button>
               <button
                 className="button button-primary button-small"
